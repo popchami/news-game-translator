@@ -1,2 +1,8 @@
 #!/bin/bash
-# placeholder: 実装は次フェーズ
+set -euo pipefail
+cd "$(dirname "$0")"
+
+echo "== collect =="
+python3 scripts/collect.py
+
+# TODO(次フェーズ): translate / validate

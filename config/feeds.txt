@@ -1,0 +1,4 @@
+# news-game-translator 収集対象RSS(1行1URL、#はコメント)
+# NHK政治カテゴリ(Step 1bで取得・解析実績あり)
+https://www3.nhk.or.jp/rss/news/cat4.xml
+# 移行先候補(www3停止時に検証の上で切替): https://news.web.nhk/n-data/conf/na/rss/cat4.xml
