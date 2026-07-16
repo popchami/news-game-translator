@@ -7,13 +7,19 @@ docs/worldbook.md に、過去に存在した矛盾したルール(王国議会�
 再混入していないかを検査する。
 
 「◯◯は使わない」のような禁止の説明文には禁止語そのものが登場するため、
-単純な部分文字列検索では誤検出する。そのため、以下の3パターンでのみ
+単純な部分文字列検索では誤検出する。そのため、以下の4パターンでのみ
 「再混入」とみなす:
 
 1. Markdownテーブルのセル内(`| ... 禁止語 ... |`)に変換先として現れる
 2. 矢印表記の変換先(`→ 禁止語` 等)として現れる
 3. 「使ってよい語」の一覧の箇条書き項目(`- 禁止語`)として現れる
 4. 【異世界ニホン・◯◯】タグで始まる投稿例ブロックの中に現れる
+
+ただし banned_terms.FORBIDDEN_MAPPING_ONLY_TERMS(「クエスト受注」
+「クエスト失敗」)は、上記1・2(変換先としての使用)のみを検査する。
+これらの語は実際のクエスト(政策実行)の結果を描写する語として
+投稿例やルール説明文に正当に現れうるため(例: docs/worldbook.md の
+いじめ問題の投稿例)、3・4のパターンでは検査しない。
 
 docs/worldbook.md §16は「旧記載→新基準」を対比させる歴史的な記録であり、
 旧記載側に禁止語が矢印付きで登場するのは意図的なため、検査対象から除外する。
@@ -28,7 +34,11 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from banned_terms import FORBIDDEN_PARTY_KATAKANA, FORBIDDEN_TERMS  # noqa: E402
+from banned_terms import (  # noqa: E402
+    FORBIDDEN_MAPPING_ONLY_TERMS,
+    FORBIDDEN_PARTY_KATAKANA,
+    FORBIDDEN_TERMS,
+)
 
 TARGET_FILES = [
     ROOT / "config" / "runtime_rules.md",
@@ -54,12 +64,16 @@ EXAMPLE_BLOCK_RE = re.compile(
 
 
 def strip_excluded_sections(path, text):
+    """指定した見出しから、次の`## `見出し(番号の有無を問わない)または
+    文末までを本文から取り除く。`### `等のより深い見出しは境界とみなさない
+    (`\n## `は`\n### `の先頭3文字とは一致しないため誤って途中で止まらない)。
+    """
     headings = EXCLUDED_SECTION_HEADINGS.get(path, [])
     for heading in headings:
         start = text.find(heading)
         if start == -1:
             continue
-        next_heading = re.search(r"\n## \d", text[start + len(heading):])
+        next_heading = re.search(r"\n## ", text[start + len(heading):])
         end = start + len(heading) + next_heading.start() if next_heading else len(text)
         text = text[:start] + text[end:]
     return text
@@ -135,6 +149,24 @@ class RuleConsistencyTest(unittest.TestCase):
                     [],
                     f"{path.relative_to(ROOT)} に政党名カタカナ変換「{term}」が"
                     f"変換先・許可リスト・投稿例として再混入しています: {matches}",
+                )
+
+    def test_mapping_only_terms_not_used_as_mapping(self):
+        """「クエスト受注」「クエスト失敗」は変換先としての再混入のみ検査する。
+
+        投稿例・箇条書きでの正当な使用(実際のクエストの結果を描写する
+        用法)は許可するため、find_mapping_usages(テーブル/矢印)のみを
+        使う(find_bullet_list_usages・find_example_post_usagesは使わない)。
+        """
+        for path in TARGET_FILES:
+            text = strip_excluded_sections(path, path.read_text(encoding="utf-8"))
+            for term in FORBIDDEN_MAPPING_ONLY_TERMS:
+                matches = find_mapping_usages(text, term)
+                self.assertEqual(
+                    matches,
+                    [],
+                    f"{path.relative_to(ROOT)} に「{term}」が変換先として"
+                    f"再混入しています(法案の審議入り・否決に使用不可): {matches}",
                 )
 
 
