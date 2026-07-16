@@ -4,5 +4,6 @@ drafts/*.md
 drafts/.tmp_*
 data/state/processed_work_issues.json
 data/state/.pending_*.json
+data/state/pending_work_issue_closures.json
 __pycache__/
 *.pyc

@@ -6,21 +6,40 @@ TODAY=$(TZ=Asia/Tokyo date +%F)
 RAW="data/raw/${TODAY}.json"
 TMP="drafts/.tmp_${TODAY}.md"
 OUT="drafts/${TODAY}.md"
-PENDING="data/state/.pending_${TODAY}.json"
+WORK_PENDING="data/state/.pending_${TODAY}.json"
 LEDGER="data/state/processed_work_issues.json"
+CLOSE_RETRY="data/state/pending_work_issue_closures.json"
 WORK_REPO="popchami/news-game-translator"
 
-rm -f "${PENDING}"
+rm -f "${WORK_PENDING}"
 
 SOURCE=rss
 echo "== Work Issue確認 =="
-if python3 scripts/import_work_news.py fetch \
-  --repo "${WORK_REPO}" --ledger "${LEDGER}" --out "${RAW}" --pending-out "${PENDING}"; then
-  SOURCE=work
-  echo "Work記事を使用します"
-else
-  echo "[WARN] Work記事は使用しません。既存RSS収集へフォールバックします" >&2
-fi
+# fetchの終了コードは3値(0=新規Work記事あり/2=重複記事のみで処理済み
+# 確定可/その他=RSSへフォールバック)を使う。set -eの対象外にするため
+# 一時的に無効化してから終了コードを取得する。
+set +e
+python3 scripts/import_work_news.py fetch \
+  --repo "${WORK_REPO}" --ledger "${LEDGER}" --out "${RAW}" \
+  --pending-out "${WORK_PENDING}" --close-retry "${CLOSE_RETRY}"
+FETCH_RC=$?
+set -e
+
+case "${FETCH_RC}" in
+  0)
+    SOURCE=work
+    echo "Work記事を使用します"
+    ;;
+  2)
+    echo "[INFO] 新規Work記事は重複のみのため、処理済みとして確定・closeします(下書きはRSSを使用)"
+    python3 scripts/import_work_news.py commit-pending \
+      --pending "${WORK_PENDING}" --ledger "${LEDGER}" \
+      --repo "${WORK_REPO}" --close-retry "${CLOSE_RETRY}"
+    ;;
+  *)
+    echo "[WARN] Work記事は使用しません。既存RSS収集へフォールバックします" >&2
+    ;;
+esac
 
 if [ "${SOURCE}" = "rss" ]; then
   echo "== collect(RSS) =="
@@ -45,9 +64,11 @@ fi
 mv "${TMP}" "${OUT}"
 
 if [ "${SOURCE}" = "work" ]; then
-  echo "== Work Issue処理済み台帳を更新 =="
-  python3 scripts/import_work_news.py commit-pending --pending "${PENDING}" --ledger "${LEDGER}"
+  echo "== Work Issue処理済み台帳を更新しclose =="
+  python3 scripts/import_work_news.py commit-pending \
+    --pending "${WORK_PENDING}" --ledger "${LEDGER}" \
+    --repo "${WORK_REPO}" --close-retry "${CLOSE_RETRY}"
 fi
-rm -f "${PENDING}"
+rm -f "${WORK_PENDING}"
 
 echo "完成: ${OUT}(収集経路: ${SOURCE})"

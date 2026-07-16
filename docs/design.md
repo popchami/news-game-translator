@@ -107,6 +107,14 @@ Issue単位・重複管理・run.shの分岐の詳細は `docs/news-packet.md` �
   processed_work_issues.json`、端末固有・gitignore対象)は、
   `claude -p` 変換と `validate.py` 全件合格を経て `drafts/` へ正式移動
   した後にだけ更新する。
+- Termux側からGitHubへの書き込みは、台帳更新の直後に行う対象Issueの
+  close**だけ**を許可する(コメント・ラベル・本文・タイトルの変更や
+  Issue削除は行わない)。close失敗時は警告のみとし、下書き・台帳は
+  取り消さず、再試行台帳(`data/state/pending_work_issue_closures.json`、
+  端末固有・gitignore対象)へ記録して次回実行時に再試行する。
+- 含まれる全eventKeyが既に処理済みのIssue(重複記事だけのIssue)は、
+  ニュースを再変換せずにIssue番号だけを処理済みとして記録・closeできる。
+  詳細な実行順序・再試行仕様は `docs/news-packet.md` を参照。
 
 ---
 
@@ -312,3 +320,4 @@ Kick×Kickとは完全に別リポジトリ・別ディレクトリとする(混
 | v0.3(Phase 1) | 2026-07-16 | worldbook.md/runtime_rules.md/glossary.md/translate.mdの4文書構造を確立。§4/§5/§7の陳腐化した記述(v0.1時代の用語表・単層出力例・旧ディレクトリ構成)を現行に同期。validate.pyの強化仕様(全件合格でなければ非ゼロ終了)を反映 |
 | v0.4(Phase 1完了) | 2026-07-16 | validate.pyにUnicode正規化(NFKC・不可視文字除去)と入力記事数・リンクの一対一対応チェックを追加。§8.5「validate.pyの限界と多重防御」を新設し、同義語による回避は検出できない既知の設計限界と、4段階の多重防御方針を明記 |
 | v0.5(Phase 2a) | 2026-07-17 | §3.5「Work Newsの取り込み」を新設。ChatGPT WorkがGitHub Issueへ登録するWork News Packetの取り込み(scripts/import_work_news.py)とRSSとの共通スキーマ化(scripts/news_schema.py)、gh未認証・Issue不正時のRSSフォールバック、処理済みIssue/eventKey台帳を追加。詳細はdocs/news-packet.md参照 |
+| v0.6(Phase 2a追加) | 2026-07-17 | 全工程成功後のGitHub Issue close機能を追加(gh issue closeのみ許可、コメント/ラベル/本文/タイトル変更は禁止)。close失敗時の再試行台帳(data/state/pending_work_issue_closures.json)、全eventKeyが重複済みのIssueを再変換せず処理済み・close対象にできるduplicate_only状態を追加。詳細はdocs/news-packet.md参照 |

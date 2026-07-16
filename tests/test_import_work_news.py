@@ -193,8 +193,12 @@ class FetchNewWorkArticlesTest(unittest.TestCase):
         issue = make_issue(2, make_packet())  # 別Issueだが同じeventKey
         with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue]):
             result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
-        self.assertEqual(result["status"], "no_new")
+        # Issue自体はJSON構造が正常で、含まれる全eventKeyが既に処理済み
+        # なので"duplicate_only"となり、ニュースは再変換しないが
+        # Issue番号は処理済み・close対象として記録できる。
+        self.assertEqual(result["status"], "duplicate_only")
         self.assertEqual(result["articles"], [])
+        self.assertEqual(result["issue_numbers"], [2])
 
     def test_only_new_event_key_included_when_issue_has_one_duplicate_and_one_new(self):
         self.write_ledger(processed_event_keys=["event-1"])
@@ -215,7 +219,26 @@ class FetchNewWorkArticlesTest(unittest.TestCase):
             result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
         self.assertEqual(result["status"], "invalid")
         self.assertEqual(result["articles"], [])
+        # JSON不正のIssueはcloseしてはいけないため、処理済み対象にも含めない。
+        self.assertEqual(result["issue_numbers"], [])
         self.assertTrue(any("Issue #1" in m for m in result["messages"]))
+
+    def test_fully_duplicate_valid_issue_marked_duplicate_only(self):
+        # 全eventKeyが既に処理済みの、JSON構造として正常なIssue。
+        # ニュースは再変換しないが、Issue番号は処理済み記録・close対象に
+        # できる("重複記事だけのIssue"要件)。
+        self.write_ledger(processed_event_keys=["event-1", "event-2"])
+        articles = [
+            make_article(eventKey="event-1", link="https://example.com/1"),
+            make_article(eventKey="event-2", link="https://example.com/2"),
+        ]
+        issue = make_issue(9, make_packet(articles=articles))
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result["status"], "duplicate_only")
+        self.assertEqual(result["articles"], [])
+        self.assertEqual(result["issue_numbers"], [9])
+        self.assertEqual(result["event_keys"], [])
 
     def test_prompt_injection_prose_not_executed_as_instruction(self):
         packet = make_packet()
@@ -283,6 +306,308 @@ class LedgerCommitTimingTest(unittest.TestCase):
         ledger = iwn.load_ledger(self.ledger_path)
         self.assertEqual(ledger["processed_issues"], [5])
         self.assertEqual(ledger["processed_event_keys"], ["event-1"])
+
+
+class CloseWorkIssueTest(unittest.TestCase):
+    """gh issue close の呼び出し・入力検証・冪等性を検証する。"""
+
+    def test_rejects_non_positive_or_non_int_issue_number(self):
+        for bad in (0, -5, "10", 1.5, True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    iwn.close_work_issue("owner/repo", bad)
+
+    def test_close_success(self):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return R()
+
+        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
+            iwn.close_work_issue("owner/repo", 42)
+        self.assertEqual(calls, [["gh", "issue", "close", "42", "--repo", "owner/repo"]])
+
+    def test_already_closed_is_treated_as_success(self):
+        def fake_run(cmd, **kwargs):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "GraphQL: Issue is already closed (closeIssue)"
+            return R()
+
+        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
+            iwn.close_work_issue("owner/repo", 50)  # 例外が出なければOK
+
+    def test_other_failure_raises_gh_fetch_error(self):
+        def fake_run(cmd, **kwargs):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "HTTP 401: Bad credentials"
+            return R()
+
+        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
+            with self.assertRaises(iwn.GhFetchError):
+                iwn.close_work_issue("owner/repo", 51)
+
+    def test_only_close_and_list_gh_subcommands_are_used_in_source(self):
+        # コメント追加・ラベル変更・本文/タイトル変更・Issue削除に
+        # 相当するgh呼び出しがソース上に存在しないことを確認する。
+        source = pathlib.Path(iwn.__file__).read_text(encoding="utf-8")
+        forbidden_snippets = [
+            "issue comment",
+            "issue edit",
+            "issue reopen",
+            "issue delete",
+            "issue pin",
+            "--add-label",
+            "--remove-label",
+        ]
+        for snippet in forbidden_snippets:
+            self.assertNotIn(snippet, source, f"'{snippet}' はscripts/import_work_news.pyに含まれてはいけません")
+        self.assertIn('"issue", "list"', source)
+        self.assertIn('"issue", "close"', source)
+
+
+class RetryPendingClosuresTest(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.retry_path = pathlib.Path(self._tmpdir.name) / "pending_work_issue_closures.json"
+
+    def test_no_file_returns_empty_result(self):
+        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(result, {"closed": [], "remaining": [], "messages": []})
+
+    def test_retry_success_removes_entry_and_keeps_file_for_remaining(self):
+        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [20, 21]})
+
+        def fake_close(repo, number):
+            if number == 21:
+                raise iwn.GhFetchError("still failing")
+
+        with mock.patch.object(iwn, "close_work_issue", side_effect=fake_close):
+            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+
+        self.assertEqual(result["closed"], [20])
+        self.assertEqual(result["remaining"], [21])
+        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["pending_issue_numbers"], [21])
+
+    def test_all_succeed_deletes_retry_file(self):
+        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [30]})
+        with mock.patch.object(iwn, "close_work_issue", return_value=None):
+            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(result["closed"], [30])
+        self.assertFalse(self.retry_path.exists())
+
+    def test_gh_error_for_all_preserves_all_pending_numbers(self):
+        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [40, 41]})
+        with mock.patch.object(iwn, "close_work_issue", side_effect=iwn.GhFetchError("未認証です")):
+            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(sorted(result["remaining"]), [40, 41])
+        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(data["pending_issue_numbers"]), [40, 41])
+
+    def test_corrupted_file_is_preserved_not_reset(self):
+        self.retry_path.write_text("not valid json {{{", encoding="utf-8")
+        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(result["closed"], [])
+        self.assertEqual(result["remaining"], [])
+        self.assertTrue(any("読み込みに失敗" in m for m in result["messages"]))
+        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "not valid json {{{")
+
+    def test_structurally_invalid_root_does_not_crash_fetch(self):
+        # ルートが配列など、JSON構文は正しいが構造が不正な場合も
+        # クラッシュせず、警告メッセージを返してファイルを保持する。
+        self.retry_path.write_text("[]", encoding="utf-8")
+        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(result["closed"], [])
+        self.assertEqual(result["remaining"], [])
+        self.assertTrue(any("読み込みに失敗" in m for m in result["messages"]))
+        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "[]")
+
+    def test_structurally_invalid_field_does_not_crash_fetch(self):
+        self.retry_path.write_text('{"pending_issue_numbers": "not-a-list"}', encoding="utf-8")
+        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(result["closed"], [])
+        self.assertEqual(result["remaining"], [])
+        self.assertTrue(any("読み込みに失敗" in m for m in result["messages"]))
+
+    def test_duplicate_issue_numbers_in_file_are_deduplicated(self):
+        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [60, 60, 60]})
+        calls = []
+        with mock.patch.object(iwn, "close_work_issue", side_effect=lambda repo, n: calls.append(n)):
+            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(calls, [60])
+        self.assertEqual(result["closed"], [60])
+
+    def test_already_closed_issue_retried_safely(self):
+        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [70]})
+
+        def fake_run(cmd, **kwargs):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "GraphQL: Issue is already closed (closeIssue)"
+            return R()
+
+        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
+            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
+        self.assertEqual(result["closed"], [70])
+        self.assertFalse(self.retry_path.exists())
+
+
+class RecordCloseFailureTest(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.retry_path = pathlib.Path(self._tmpdir.name) / "pending_work_issue_closures.json"
+
+    def test_creates_file_when_missing(self):
+        iwn.record_close_failure(self.retry_path, 100)
+        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["pending_issue_numbers"], [100])
+
+    def test_does_not_duplicate_same_issue_number(self):
+        iwn.record_close_failure(self.retry_path, 100)
+        iwn.record_close_failure(self.retry_path, 100)
+        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["pending_issue_numbers"], [100])
+
+    def test_appends_additional_issue_numbers(self):
+        iwn.record_close_failure(self.retry_path, 100)
+        iwn.record_close_failure(self.retry_path, 101)
+        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["pending_issue_numbers"], [100, 101])
+
+    def test_corrupted_file_raises_instead_of_silently_resetting(self):
+        self.retry_path.write_text("{ not json", encoding="utf-8")
+        with self.assertRaises(json.JSONDecodeError):
+            iwn.record_close_failure(self.retry_path, 100)
+        # 例外発生時、壊れたファイルは書き換えられていない。
+        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "{ not json")
+
+    def test_structurally_invalid_root_raises_instead_of_crashing_with_attribute_error(self):
+        # JSON構文としては正しいが、ルートがオブジェクトでない
+        # (例: 配列)場合、AttributeError等で暗黙にクラッシュせず、
+        # ValueErrorとして明示的に送出する(Codexレビュー指摘)。
+        self.retry_path.write_text("[]", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            iwn.record_close_failure(self.retry_path, 100)
+        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "[]")
+
+    def test_structurally_invalid_field_raises_instead_of_crashing_with_type_error(self):
+        # pending_issue_numbersが配列でない(例: オブジェクト)場合、
+        # set()構築時のTypeError等で暗黙にクラッシュせず、ValueErrorとして
+        # 明示的に送出する(Codexレビュー指摘)。
+        self.retry_path.write_text('{"pending_issue_numbers": {"a": 1}}', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            iwn.record_close_failure(self.retry_path, 100)
+
+
+class CommitPendingCloseTest(unittest.TestCase):
+    """commit-pendingが「台帳更新→close」の順序を守り、close失敗時も
+    台帳・下書きを取り消さないことを検証する(必須テスト1-10相当)。
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.tmp = pathlib.Path(self._tmpdir.name)
+        self.ledger_path = self.tmp / "processed_work_issues.json"
+        self.pending_path = self.tmp / ".pending_test.json"
+        self.close_retry_path = self.tmp / "pending_work_issue_closures.json"
+
+    def make_args(self, repo="owner/repo"):
+        return type(
+            "Args",
+            (),
+            {
+                "pending": str(self.pending_path),
+                "ledger": str(self.ledger_path),
+                "repo": repo,
+                "close_retry": str(self.close_retry_path),
+            },
+        )()
+
+    def test_close_called_only_after_ledger_commit_succeeds(self):
+        iwn.write_pending(self.pending_path, issue_numbers=[10], event_keys=["event-x"])
+        closed_numbers = []
+        with mock.patch.object(iwn, "close_work_issue", side_effect=lambda repo, n: closed_numbers.append(n)):
+            iwn.cmd_commit_pending(self.make_args())
+        ledger = iwn.load_ledger(self.ledger_path)
+        self.assertEqual(ledger["processed_issues"], [10])
+        self.assertEqual(closed_numbers, [10])
+
+    def test_close_never_called_if_ledger_commit_fails(self):
+        # 順序性の直接検証: 台帳更新(write_json_atomic経由)自体が失敗
+        # した場合、closeは一切呼ばれてはいけない。
+        iwn.write_pending(self.pending_path, issue_numbers=[15], event_keys=["event-w"])
+        with mock.patch.object(iwn, "write_json_atomic", side_effect=OSError("disk full")), \
+             mock.patch.object(iwn, "close_work_issue") as mock_close:
+            with self.assertRaises(OSError):
+                iwn.cmd_commit_pending(self.make_args())
+        mock_close.assert_not_called()
+
+    def test_commit_pending_survives_structurally_broken_close_retry_ledger(self):
+        # close失敗時、再試行台帳への記録(record_close_failure)自体が
+        # 構造不正でValueErrorを送出しても、commit-pending全体はクラッシュ
+        # せず警告のみで完了する(run.sh全体は成功扱いのまま)。
+        iwn.write_pending(self.pending_path, issue_numbers=[16], event_keys=["event-v"])
+        self.close_retry_path.write_text("[]", encoding="utf-8")  # 構造不正
+        with mock.patch.object(iwn, "close_work_issue", side_effect=iwn.GhFetchError("network error")):
+            rc = iwn.cmd_commit_pending(self.make_args())
+        self.assertEqual(rc, 0)
+        ledger = iwn.load_ledger(self.ledger_path)
+        self.assertEqual(ledger["processed_issues"], [16], "再試行台帳の記録失敗があっても処理済み台帳は維持される")
+
+    def test_fetch_alone_never_closes_issue(self):
+        # 全工程成功前(fetchの時点)ではcloseを一切行わない。
+        issue = make_issue(11, make_packet())
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue]), \
+             mock.patch.object(iwn, "close_work_issue") as mock_close:
+            iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        mock_close.assert_not_called()
+
+    def test_no_repo_means_close_is_skipped(self):
+        # --repo未指定時はcloseを試みない(後方互換・テストの明示的確認用)。
+        iwn.write_pending(self.pending_path, issue_numbers=[12], event_keys=["event-z"])
+        with mock.patch.object(iwn, "close_work_issue") as mock_close:
+            iwn.cmd_commit_pending(self.make_args(repo=None))
+        mock_close.assert_not_called()
+        ledger = iwn.load_ledger(self.ledger_path)
+        self.assertEqual(ledger["processed_issues"], [12])
+
+    def test_close_failure_keeps_committed_ledger_and_records_retry(self):
+        iwn.write_pending(self.pending_path, issue_numbers=[20], event_keys=["event-y"])
+        with mock.patch.object(iwn, "close_work_issue", side_effect=iwn.GhFetchError("network error")):
+            iwn.cmd_commit_pending(self.make_args())
+        ledger = iwn.load_ledger(self.ledger_path)
+        self.assertEqual(ledger["processed_issues"], [20], "close失敗しても台帳は取り消さない")
+        retry = json.loads(self.close_retry_path.read_text(encoding="utf-8"))
+        self.assertEqual(retry["pending_issue_numbers"], [20])
+
+    def test_next_fetch_retries_previously_failed_close(self):
+        # 前回close失敗 → 再試行台帳に記録済み、という状態から始める。
+        iwn.write_json_atomic(self.close_retry_path, {"pending_issue_numbers": [20]})
+        issue = make_issue(1, make_packet())
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue]), \
+             mock.patch.object(iwn, "close_work_issue", return_value=None) as mock_close:
+            args = type(
+                "Args", (),
+                {"repo": "owner/repo", "ledger": str(self.ledger_path), "out": str(self.tmp / "raw.json"),
+                 "pending_out": str(self.pending_path), "close_retry": str(self.close_retry_path)},
+            )()
+            iwn.cmd_fetch(args)
+        mock_close.assert_any_call("owner/repo", 20)
+        self.assertFalse(self.close_retry_path.exists(), "再試行成功後は再試行台帳から削除される")
 
 
 if __name__ == "__main__":
