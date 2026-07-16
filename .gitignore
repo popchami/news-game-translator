@@ -2,3 +2,5 @@ tmp/
 data/raw/*.json
 drafts/*.md
 drafts/.tmp_*
+__pycache__/
+*.pyc
