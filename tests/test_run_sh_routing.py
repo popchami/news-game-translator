@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""run.shのWork/RSS分岐・Issue close呼び出し構造の検証(Phase 2a)。
+"""run.shのWork/RSS分岐構造の検証(Phase 2a)。
 
 run.sh自体はclaude CLI・実際のgh認証・ネットワークに依存するため、
 CIやこのテスト環境ではエンドツーエンド実行できない。そのため、run.shの
@@ -10,9 +10,11 @@ CIやこのテスト環境ではエンドツーエンド実行できない。そ
 - scripts/collect.py(RSS)は、Workで新規記事が得られなかった場合の
   分岐内でのみ呼ばれる(無条件には呼ばれない → 同一実行内でWork/RSSが
   混在しない)
-- commit-pending(台帳更新+close)は、exit 0(SOURCE=work、validate成功後)
-  とexit 2(duplicate_only)の場合にのみ呼ばれ、それ以外(RSSフォール
-  バック)では呼ばれない
+- commit-pending(台帳更新のみ。closeは行わない)は、exit 0
+  (SOURCE=work、validate成功後)とexit 2(duplicate_only)の場合にのみ
+  呼ばれ、それ以外(RSSフォールバック)では呼ばれない
+- run.shにIssueのclose・コメント・ラベル・本文/タイトル変更に相当する
+  gh呼び出しが存在しない(Termuxは読み取り専用)
 
 Python標準ライブラリのみを使用する(unittest, pathlib, re)。
 """
@@ -82,7 +84,7 @@ class RunShRoutingTest(unittest.TestCase):
         case_match = re.search(r'case "\$\{FETCH_RC\}" in\n(.*?)\nesac', self.text, re.S)
         case_body = case_match.group(1)
         branch_2 = re.search(r"2\)\n(.*?);;", case_body, re.S).group(1)
-        self.assertIn("commit-pending", branch_2, "duplicate_only(exit 2)ではその場でcommit-pending(台帳更新+close)を呼ぶ")
+        self.assertIn("commit-pending", branch_2, "duplicate_only(exit 2)ではその場でcommit-pending(台帳更新のみ)を呼ぶ")
         branch_default = re.search(r"\*\)\n(.*?);;", case_body, re.S).group(1)
         self.assertNotIn("commit-pending", branch_default, "RSSフォールバックのみの場合はcommit-pendingを呼ばない")
 
@@ -96,18 +98,27 @@ class RunShRoutingTest(unittest.TestCase):
         rss_block = re.search(r'if \[ "\$\{SOURCE\}" = "rss" \]; then\n(.*?)\nfi', self.text, re.S).group(1)
         self.assertNotIn("commit-pending", rss_block)
 
-    def test_commit_pending_passes_repo_for_close(self):
-        case_match = re.search(r'case "\$\{FETCH_RC\}" in\n(.*?)\nesac', self.text, re.S)
-        branch_2 = re.search(r"2\)\n(.*?);;", case_match.group(1), re.S).group(1)
-        self.assertIn("--repo", branch_2, "duplicate_only分岐のcommit-pendingは--repoを渡してcloseを有効化する必要がある")
-
-        work_block = re.search(r'if \[ "\$\{SOURCE\}" = "work" \]; then\n(.*?)\nfi', self.text, re.S).group(1)
-        self.assertIn("--repo", work_block, "Work成功時のcommit-pendingは--repoを渡してcloseを有効化する必要がある")
-
     def test_no_forbidden_gh_write_subcommands_in_run_sh(self):
-        forbidden = ["issue comment", "issue edit", "issue reopen", "issue delete", "--add-label", "--remove-label"]
+        forbidden = [
+            "issue close",
+            "issue comment",
+            "issue edit",
+            "issue reopen",
+            "issue delete",
+            "--add-label",
+            "--remove-label",
+            "--repo",  # commit-pendingにはrepoを渡さない(closeを行わないため不要)
+        ]
+        # --repoはWork Issue取得(fetch)自体では必要なので、fetch呼び出しの
+        # 行を除いたテキストで検査する。
+        text_without_fetch_call = re.sub(r"python3 scripts/import_work_news\.py fetch.*?--pending-out \"\$\{WORK_PENDING\}\"", "", self.text, flags=re.S)
         for snippet in forbidden:
-            self.assertNotIn(snippet, self.text)
+            self.assertNotIn(snippet, text_without_fetch_call, f"'{snippet}' が想定外の箇所に存在します")
+
+    def test_close_retry_ledger_references_removed(self):
+        self.assertNotIn("CLOSE_RETRY", self.text)
+        self.assertNotIn("close-retry", self.text)
+        self.assertNotIn("pending_work_issue_closures", self.text)
 
     def test_set_euo_pipefail_present(self):
         self.assertIn("set -euo pipefail", self.text)

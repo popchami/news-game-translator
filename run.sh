@@ -8,7 +8,6 @@ TMP="drafts/.tmp_${TODAY}.md"
 OUT="drafts/${TODAY}.md"
 WORK_PENDING="data/state/.pending_${TODAY}.json"
 LEDGER="data/state/processed_work_issues.json"
-CLOSE_RETRY="data/state/pending_work_issue_closures.json"
 WORK_REPO="popchami/news-game-translator"
 
 rm -f "${WORK_PENDING}"
@@ -21,7 +20,7 @@ echo "== Work Issue確認 =="
 set +e
 python3 scripts/import_work_news.py fetch \
   --repo "${WORK_REPO}" --ledger "${LEDGER}" --out "${RAW}" \
-  --pending-out "${WORK_PENDING}" --close-retry "${CLOSE_RETRY}"
+  --pending-out "${WORK_PENDING}"
 FETCH_RC=$?
 set -e
 
@@ -31,10 +30,9 @@ case "${FETCH_RC}" in
     echo "Work記事を使用します"
     ;;
   2)
-    echo "[INFO] 新規Work記事は重複のみのため、処理済みとして確定・closeします(下書きはRSSを使用)"
+    echo "[INFO] 新規Work記事は重複のみのため、処理済みとして確定します(下書きはRSSを使用。Issueはopenのまま)"
     python3 scripts/import_work_news.py commit-pending \
-      --pending "${WORK_PENDING}" --ledger "${LEDGER}" \
-      --repo "${WORK_REPO}" --close-retry "${CLOSE_RETRY}"
+      --pending "${WORK_PENDING}" --ledger "${LEDGER}"
     ;;
   *)
     echo "[WARN] Work記事は使用しません。既存RSS収集へフォールバックします" >&2
@@ -64,10 +62,9 @@ fi
 mv "${TMP}" "${OUT}"
 
 if [ "${SOURCE}" = "work" ]; then
-  echo "== Work Issue処理済み台帳を更新しclose =="
+  echo "== Work Issue処理済み台帳を更新 =="
   python3 scripts/import_work_news.py commit-pending \
-    --pending "${WORK_PENDING}" --ledger "${LEDGER}" \
-    --repo "${WORK_REPO}" --close-retry "${CLOSE_RETRY}"
+    --pending "${WORK_PENDING}" --ledger "${LEDGER}"
 fi
 rm -f "${WORK_PENDING}"
 

@@ -2,9 +2,11 @@
 """scripts/import_work_news.py のテスト(Phase 2a)。
 
 Work News PacketのJSONコードブロック抽出・構造検証・重複管理(処理済み
-Issue番号・eventKey)・台帳の更新タイミング(pending→commit)を検証する。
-gh CLIそのものは呼ばず、run_gh_issue_list をモックして完全にオフラインで
-テストする。Python標準ライブラリのみを使用する
+Issue番号・eventKey)・台帳の更新タイミング(pending→commit)・1回のfetchで
+取り込む記事数の上限(全Issue合計10件・oldest-first・Issue単位で分割
+しない)を検証する。Termuxは読み取り専用(gh issue listのみ)であり、
+closeは行わない。gh CLIそのものは呼ばず、run_gh_issue_list をモックして
+完全にオフラインでテストする。Python標準ライブラリのみを使用する
 (unittest, unittest.mock, json, pathlib, sys, tempfile)。
 """
 import json
@@ -43,6 +45,13 @@ def make_article(**overrides):
     return article
 
 
+def make_articles(n, prefix):
+    return [
+        make_article(eventKey=f"{prefix}-{i}", link=f"https://example.com/{prefix}/{i}")
+        for i in range(n)
+    ]
+
+
 def make_packet(articles=None, **overrides):
     packet = {
         "packetVersion": 1,
@@ -54,14 +63,14 @@ def make_packet(articles=None, **overrides):
     return packet
 
 
-def make_issue(number, packet=None, body=None):
+def make_issue(number, packet=None, body=None, created_at="2026-07-17T09:00:00Z"):
     if body is None:
         body = "```json\n" + json.dumps(packet, ensure_ascii=False) + "\n```\n"
     return {
         "number": number,
         "title": f"[Work News] 2026-07-17 09:00 JST (#{number})",
         "body": body,
-        "createdAt": "2026-07-17T09:00:00Z",
+        "createdAt": created_at,
     }
 
 
@@ -142,6 +151,28 @@ class ValidatePacketTest(unittest.TestCase):
         reasons = iwn.validate_packet(make_packet(articles=[make_article(eventKey="")]))
         self.assertTrue(any("eventKey" in r for r in reasons))
 
+    def test_list_field_with_non_string_element_rejected(self):
+        # people/organizations等の配列項目は、各要素が文字列でなければ
+        # 拒否する(数値・オブジェクト・null等の混入を許さない)。
+        for field, bad_value in [
+            ("people", [123]),
+            ("organizations", [{"name": "x"}]),
+            ("confirmedFacts", [None]),
+            ("sourceDifferences", [["nested"]]),
+        ]:
+            with self.subTest(field=field):
+                reasons = iwn.validate_packet(make_packet(articles=[make_article(**{field: bad_value})]))
+                self.assertTrue(
+                    any(field in r and "文字列" in r for r in reasons),
+                    f"{field}の非文字列要素が拒否されていない: {reasons}",
+                )
+
+    def test_list_field_with_all_string_elements_accepted(self):
+        reasons = iwn.validate_packet(
+            make_packet(articles=[make_article(confirmedFacts=["事実1", "事実2"], people=["人物A"])])
+        )
+        self.assertEqual(reasons, [])
+
 
 class FetchNewWorkArticlesTest(unittest.TestCase):
     def setUp(self):
@@ -194,8 +225,8 @@ class FetchNewWorkArticlesTest(unittest.TestCase):
         with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue]):
             result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
         # Issue自体はJSON構造が正常で、含まれる全eventKeyが既に処理済み
-        # なので"duplicate_only"となり、ニュースは再変換しないが
-        # Issue番号は処理済み・close対象として記録できる。
+        # なので"duplicate_only"となり、ニュースは再変換しないがIssue番号
+        # は端末内台帳へ処理済みとして記録される(GitHub上はopenのまま)。
         self.assertEqual(result["status"], "duplicate_only")
         self.assertEqual(result["articles"], [])
         self.assertEqual(result["issue_numbers"], [2])
@@ -219,14 +250,14 @@ class FetchNewWorkArticlesTest(unittest.TestCase):
             result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
         self.assertEqual(result["status"], "invalid")
         self.assertEqual(result["articles"], [])
-        # JSON不正のIssueはcloseしてはいけないため、処理済み対象にも含めない。
+        # JSON不正のIssueは処理済みにしないため、issue_numbersに含めない。
         self.assertEqual(result["issue_numbers"], [])
         self.assertTrue(any("Issue #1" in m for m in result["messages"]))
 
     def test_fully_duplicate_valid_issue_marked_duplicate_only(self):
         # 全eventKeyが既に処理済みの、JSON構造として正常なIssue。
-        # ニュースは再変換しないが、Issue番号は処理済み記録・close対象に
-        # できる("重複記事だけのIssue"要件)。
+        # ニュースは再変換しないが、Issue番号は端末内台帳へ処理済みとして
+        # 記録できる("重複記事だけのIssue"要件。GitHub上はopenのまま)。
         self.write_ledger(processed_event_keys=["event-1", "event-2"])
         articles = [
             make_article(eventKey="event-1", link="https://example.com/1"),
@@ -253,6 +284,135 @@ class FetchNewWorkArticlesTest(unittest.TestCase):
         # 抽出された記事はコードブロック内のデータのみで、プロンプト文言は
         # 一切結果に含まれない。
         self.assertEqual(result["articles"][0]["title"], packet["articles"][0]["title"])
+
+
+class BatchArticleCapAndOrderingTest(unittest.TestCase):
+    """1回のfetchで取り込む新規記事の合計上限(全Issue横断で最大10件)、
+    oldest-first順序、Issue単位で分割しない仕様を検証する。
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.ledger_path = pathlib.Path(self._tmpdir.name) / "processed_work_issues.json"
+
+    def test_two_six_article_issues_only_the_older_one_is_processed(self):
+        # 6件入りIssue(古い)+6件入りIssue(新しい)。合計は12件になり
+        # 上限(10件)を超えるため、古い方だけが今回処理される。
+        older = make_issue(
+            1, make_packet(articles=make_articles(6, "old")), created_at="2026-07-01T00:00:00Z"
+        )
+        newer = make_issue(
+            2, make_packet(articles=make_articles(6, "new")), created_at="2026-07-10T00:00:00Z"
+        )
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[newer, older]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["articles"]), 6)
+        self.assertEqual(result["issue_numbers"], [1])
+        self.assertTrue(all(a["eventKey"].startswith("old-") for a in result["articles"]))
+
+    def test_over_cap_issue_stops_all_later_candidates_not_just_itself(self):
+        # A(古い,6件)→合計6。B(中,6件)→合計12で上限超過、Bは持ち越し。
+        # ここでC(新しい,2件)を追加する: もし実装が「上限超過分だけ
+        # スキップして次の候補へ進む(continue)」になっていた場合、
+        # 6+2=8<=10 のためCが誤って取り込まれてしまう。正しい実装は
+        # 「Bで処理を打ち切り、それ以降(Bより新しい)候補は一切見ない
+        # (break)」なので、Cも含めて処理されない。
+        a = make_issue(1, make_packet(articles=make_articles(6, "a")), created_at="2026-07-01T00:00:00Z")
+        b = make_issue(2, make_packet(articles=make_articles(6, "b")), created_at="2026-07-10T00:00:00Z")
+        c = make_issue(3, make_packet(articles=make_articles(2, "c")), created_at="2026-07-20T00:00:00Z")
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[c, b, a]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result["issue_numbers"], [1], "Bで打ち切られた後、Cも取り込まれてはいけない(continueではなくbreak)")
+        self.assertEqual(len(result["articles"]), 6)
+        self.assertTrue(all(a_["eventKey"].startswith("a-") for a_ in result["articles"]))
+
+    def test_multiple_ten_article_issues_only_one_processed_per_run(self):
+        # 10件入りIssueが複数ある場合、1回のfetchでは1 Issueだけ処理される。
+        issue_a = make_issue(
+            1, make_packet(articles=make_articles(10, "a")), created_at="2026-07-01T00:00:00Z"
+        )
+        issue_b = make_issue(
+            2, make_packet(articles=make_articles(10, "b")), created_at="2026-07-02T00:00:00Z"
+        )
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue_b, issue_a]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["articles"]), 10)
+        self.assertEqual(result["issue_numbers"], [1])
+
+    def test_deferred_issue_is_not_marked_processed(self):
+        # 上限超過で今回処理されなかったIssueは、issue_numbersにもeventKeyにも
+        # 含まれない(次回のfetchでも候補として残る = 処理済みにしない)。
+        older = make_issue(
+            1, make_packet(articles=make_articles(6, "old")), created_at="2026-07-01T00:00:00Z"
+        )
+        newer = make_issue(
+            2, make_packet(articles=make_articles(6, "new")), created_at="2026-07-10T00:00:00Z"
+        )
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[newer, older]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertNotIn(2, result["issue_numbers"])
+        self.assertTrue(all(not ek.startswith("new-") for ek in result["event_keys"]))
+
+        # 次回のfetch(前回分をledgerへ反映した状態)で、残っていたIssueが
+        # 今度こそ処理される。
+        iwn.write_json_atomic(
+            self.ledger_path,
+            {"processed_issues": result["issue_numbers"], "processed_event_keys": result["event_keys"]},
+        )
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[newer, older]):
+            result2 = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result2["status"], "ok")
+        self.assertEqual(result2["issue_numbers"], [2])
+        self.assertEqual(len(result2["articles"]), 6)
+
+    def test_issues_are_selected_oldest_first(self):
+        # gh issue listの返却順(newest-first相当)に関わらず、常に
+        # createdAt昇順(oldest-first)で処理される。
+        issue_new = make_issue(
+            10, make_packet(articles=make_articles(1, "n")), created_at="2026-07-15T00:00:00Z"
+        )
+        issue_old = make_issue(
+            11, make_packet(articles=make_articles(1, "o")), created_at="2026-07-01T00:00:00Z"
+        )
+        issue_mid = make_issue(
+            12, make_packet(articles=make_articles(1, "m")), created_at="2026-07-08T00:00:00Z"
+        )
+        # 3件合計は3件で上限内なので全て処理されるが、issue_numbersの順序が
+        # oldest-firstになっていることを確認する。
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue_new, issue_old, issue_mid]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["issue_numbers"], [11, 12, 10])
+
+    def test_same_created_at_breaks_tie_by_issue_number(self):
+        # createdAtが同一の場合、Issue番号の昇順で決定的に順序付ける。
+        same_time = "2026-07-10T00:00:00Z"
+        issue_5 = make_issue(5, make_packet(articles=make_articles(1, "five")), created_at=same_time)
+        issue_2 = make_issue(2, make_packet(articles=make_articles(1, "two")), created_at=same_time)
+        issue_9 = make_issue(9, make_packet(articles=make_articles(1, "nine")), created_at=same_time)
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue_5, issue_9, issue_2]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result["issue_numbers"], [2, 5, 9])
+
+    def test_duplicate_only_issue_does_not_count_against_cap(self):
+        # 重複記事だけのIssue(0件追加)は合計に加算されないため、
+        # 後続のIssueの取り込み可否に影響しない。
+        self.ledger_path = pathlib.Path(self._tmpdir.name) / "ledger2.json"
+        iwn.write_json_atomic(self.ledger_path, {"processed_issues": [], "processed_event_keys": ["dup-0"]})
+        dup_issue = make_issue(
+            1, make_packet(articles=make_articles(1, "dup")), created_at="2026-07-01T00:00:00Z"
+        )
+        fresh_issue = make_issue(
+            2, make_packet(articles=make_articles(10, "fresh")), created_at="2026-07-02T00:00:00Z"
+        )
+        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[fresh_issue, dup_issue]):
+            result = iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["articles"]), 10)
+        self.assertEqual(result["issue_numbers"], [1, 2])
 
 
 class LedgerCommitTimingTest(unittest.TestCase):
@@ -308,306 +468,38 @@ class LedgerCommitTimingTest(unittest.TestCase):
         self.assertEqual(ledger["processed_event_keys"], ["event-1"])
 
 
-class CloseWorkIssueTest(unittest.TestCase):
-    """gh issue close の呼び出し・入力検証・冪等性を検証する。"""
+class ReadOnlyGitHubScopeTest(unittest.TestCase):
+    """Termuxは読み取り専用(gh issue listのみ)であり、close・コメント・
+    ラベル・本文/タイトル変更・Issue削除に相当するgh呼び出しが一切
+    存在しないことをソースレベルで検査する。
+    """
 
-    def test_rejects_non_positive_or_non_int_issue_number(self):
-        for bad in (0, -5, "10", 1.5, True):
-            with self.subTest(bad=bad):
-                with self.assertRaises(ValueError):
-                    iwn.close_work_issue("owner/repo", bad)
-
-    def test_close_success(self):
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-
-            class R:
-                returncode = 0
-                stdout = ""
-                stderr = ""
-            return R()
-
-        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
-            iwn.close_work_issue("owner/repo", 42)
-        self.assertEqual(calls, [["gh", "issue", "close", "42", "--repo", "owner/repo"]])
-
-    def test_already_closed_is_treated_as_success(self):
-        def fake_run(cmd, **kwargs):
-            class R:
-                returncode = 1
-                stdout = ""
-                stderr = "GraphQL: Issue is already closed (closeIssue)"
-            return R()
-
-        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
-            iwn.close_work_issue("owner/repo", 50)  # 例外が出なければOK
-
-    def test_other_failure_raises_gh_fetch_error(self):
-        def fake_run(cmd, **kwargs):
-            class R:
-                returncode = 1
-                stdout = ""
-                stderr = "HTTP 401: Bad credentials"
-            return R()
-
-        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
-            with self.assertRaises(iwn.GhFetchError):
-                iwn.close_work_issue("owner/repo", 51)
-
-    def test_only_close_and_list_gh_subcommands_are_used_in_source(self):
-        # コメント追加・ラベル変更・本文/タイトル変更・Issue削除に
-        # 相当するgh呼び出しがソース上に存在しないことを確認する。
+    def test_no_gh_write_subcommands_in_source(self):
         source = pathlib.Path(iwn.__file__).read_text(encoding="utf-8")
+        # gh呼び出しはsubprocess.runへのリスト引数(例: "gh", "issue",
+        # "list",)として書かれるため、Pythonリテラル上の実際の見た目
+        # ("issue", "close" のようにカンマ・クォート区切り)で検査する。
+        # 単純な"issue close"(スペース区切り)の部分文字列検索では、
+        # 実際のPythonコードとして再混入したclose呼び出しを検出できない
+        # (Codexレビュー指摘)。
         forbidden_snippets = [
-            "issue comment",
-            "issue edit",
-            "issue reopen",
-            "issue delete",
-            "issue pin",
+            '"issue", "close"',
+            '"issue", "comment"',
+            '"issue", "edit"',
+            '"issue", "reopen"',
+            '"issue", "delete"',
+            '"issue", "pin"',
             "--add-label",
             "--remove-label",
         ]
         for snippet in forbidden_snippets:
             self.assertNotIn(snippet, source, f"'{snippet}' はscripts/import_work_news.pyに含まれてはいけません")
         self.assertIn('"issue", "list"', source)
-        self.assertIn('"issue", "close"', source)
 
-
-class RetryPendingClosuresTest(unittest.TestCase):
-    def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmpdir.cleanup)
-        self.retry_path = pathlib.Path(self._tmpdir.name) / "pending_work_issue_closures.json"
-
-    def test_no_file_returns_empty_result(self):
-        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(result, {"closed": [], "remaining": [], "messages": []})
-
-    def test_retry_success_removes_entry_and_keeps_file_for_remaining(self):
-        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [20, 21]})
-
-        def fake_close(repo, number):
-            if number == 21:
-                raise iwn.GhFetchError("still failing")
-
-        with mock.patch.object(iwn, "close_work_issue", side_effect=fake_close):
-            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-
-        self.assertEqual(result["closed"], [20])
-        self.assertEqual(result["remaining"], [21])
-        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["pending_issue_numbers"], [21])
-
-    def test_all_succeed_deletes_retry_file(self):
-        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [30]})
-        with mock.patch.object(iwn, "close_work_issue", return_value=None):
-            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(result["closed"], [30])
-        self.assertFalse(self.retry_path.exists())
-
-    def test_gh_error_for_all_preserves_all_pending_numbers(self):
-        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [40, 41]})
-        with mock.patch.object(iwn, "close_work_issue", side_effect=iwn.GhFetchError("未認証です")):
-            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(sorted(result["remaining"]), [40, 41])
-        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
-        self.assertEqual(sorted(data["pending_issue_numbers"]), [40, 41])
-
-    def test_corrupted_file_is_preserved_not_reset(self):
-        self.retry_path.write_text("not valid json {{{", encoding="utf-8")
-        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(result["closed"], [])
-        self.assertEqual(result["remaining"], [])
-        self.assertTrue(any("読み込みに失敗" in m for m in result["messages"]))
-        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "not valid json {{{")
-
-    def test_structurally_invalid_root_does_not_crash_fetch(self):
-        # ルートが配列など、JSON構文は正しいが構造が不正な場合も
-        # クラッシュせず、警告メッセージを返してファイルを保持する。
-        self.retry_path.write_text("[]", encoding="utf-8")
-        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(result["closed"], [])
-        self.assertEqual(result["remaining"], [])
-        self.assertTrue(any("読み込みに失敗" in m for m in result["messages"]))
-        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "[]")
-
-    def test_structurally_invalid_field_does_not_crash_fetch(self):
-        self.retry_path.write_text('{"pending_issue_numbers": "not-a-list"}', encoding="utf-8")
-        result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(result["closed"], [])
-        self.assertEqual(result["remaining"], [])
-        self.assertTrue(any("読み込みに失敗" in m for m in result["messages"]))
-
-    def test_duplicate_issue_numbers_in_file_are_deduplicated(self):
-        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [60, 60, 60]})
-        calls = []
-        with mock.patch.object(iwn, "close_work_issue", side_effect=lambda repo, n: calls.append(n)):
-            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(calls, [60])
-        self.assertEqual(result["closed"], [60])
-
-    def test_already_closed_issue_retried_safely(self):
-        iwn.write_json_atomic(self.retry_path, {"pending_issue_numbers": [70]})
-
-        def fake_run(cmd, **kwargs):
-            class R:
-                returncode = 1
-                stdout = ""
-                stderr = "GraphQL: Issue is already closed (closeIssue)"
-            return R()
-
-        with mock.patch.object(iwn.subprocess, "run", side_effect=fake_run):
-            result = iwn.retry_pending_closures("owner/repo", self.retry_path)
-        self.assertEqual(result["closed"], [70])
-        self.assertFalse(self.retry_path.exists())
-
-
-class RecordCloseFailureTest(unittest.TestCase):
-    def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmpdir.cleanup)
-        self.retry_path = pathlib.Path(self._tmpdir.name) / "pending_work_issue_closures.json"
-
-    def test_creates_file_when_missing(self):
-        iwn.record_close_failure(self.retry_path, 100)
-        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["pending_issue_numbers"], [100])
-
-    def test_does_not_duplicate_same_issue_number(self):
-        iwn.record_close_failure(self.retry_path, 100)
-        iwn.record_close_failure(self.retry_path, 100)
-        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["pending_issue_numbers"], [100])
-
-    def test_appends_additional_issue_numbers(self):
-        iwn.record_close_failure(self.retry_path, 100)
-        iwn.record_close_failure(self.retry_path, 101)
-        data = json.loads(self.retry_path.read_text(encoding="utf-8"))
-        self.assertEqual(data["pending_issue_numbers"], [100, 101])
-
-    def test_corrupted_file_raises_instead_of_silently_resetting(self):
-        self.retry_path.write_text("{ not json", encoding="utf-8")
-        with self.assertRaises(json.JSONDecodeError):
-            iwn.record_close_failure(self.retry_path, 100)
-        # 例外発生時、壊れたファイルは書き換えられていない。
-        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "{ not json")
-
-    def test_structurally_invalid_root_raises_instead_of_crashing_with_attribute_error(self):
-        # JSON構文としては正しいが、ルートがオブジェクトでない
-        # (例: 配列)場合、AttributeError等で暗黙にクラッシュせず、
-        # ValueErrorとして明示的に送出する(Codexレビュー指摘)。
-        self.retry_path.write_text("[]", encoding="utf-8")
-        with self.assertRaises(ValueError):
-            iwn.record_close_failure(self.retry_path, 100)
-        self.assertEqual(self.retry_path.read_text(encoding="utf-8"), "[]")
-
-    def test_structurally_invalid_field_raises_instead_of_crashing_with_type_error(self):
-        # pending_issue_numbersが配列でない(例: オブジェクト)場合、
-        # set()構築時のTypeError等で暗黙にクラッシュせず、ValueErrorとして
-        # 明示的に送出する(Codexレビュー指摘)。
-        self.retry_path.write_text('{"pending_issue_numbers": {"a": 1}}', encoding="utf-8")
-        with self.assertRaises(ValueError):
-            iwn.record_close_failure(self.retry_path, 100)
-
-
-class CommitPendingCloseTest(unittest.TestCase):
-    """commit-pendingが「台帳更新→close」の順序を守り、close失敗時も
-    台帳・下書きを取り消さないことを検証する(必須テスト1-10相当)。
-    """
-
-    def setUp(self):
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmpdir.cleanup)
-        self.tmp = pathlib.Path(self._tmpdir.name)
-        self.ledger_path = self.tmp / "processed_work_issues.json"
-        self.pending_path = self.tmp / ".pending_test.json"
-        self.close_retry_path = self.tmp / "pending_work_issue_closures.json"
-
-    def make_args(self, repo="owner/repo"):
-        return type(
-            "Args",
-            (),
-            {
-                "pending": str(self.pending_path),
-                "ledger": str(self.ledger_path),
-                "repo": repo,
-                "close_retry": str(self.close_retry_path),
-            },
-        )()
-
-    def test_close_called_only_after_ledger_commit_succeeds(self):
-        iwn.write_pending(self.pending_path, issue_numbers=[10], event_keys=["event-x"])
-        closed_numbers = []
-        with mock.patch.object(iwn, "close_work_issue", side_effect=lambda repo, n: closed_numbers.append(n)):
-            iwn.cmd_commit_pending(self.make_args())
-        ledger = iwn.load_ledger(self.ledger_path)
-        self.assertEqual(ledger["processed_issues"], [10])
-        self.assertEqual(closed_numbers, [10])
-
-    def test_close_never_called_if_ledger_commit_fails(self):
-        # 順序性の直接検証: 台帳更新(write_json_atomic経由)自体が失敗
-        # した場合、closeは一切呼ばれてはいけない。
-        iwn.write_pending(self.pending_path, issue_numbers=[15], event_keys=["event-w"])
-        with mock.patch.object(iwn, "write_json_atomic", side_effect=OSError("disk full")), \
-             mock.patch.object(iwn, "close_work_issue") as mock_close:
-            with self.assertRaises(OSError):
-                iwn.cmd_commit_pending(self.make_args())
-        mock_close.assert_not_called()
-
-    def test_commit_pending_survives_structurally_broken_close_retry_ledger(self):
-        # close失敗時、再試行台帳への記録(record_close_failure)自体が
-        # 構造不正でValueErrorを送出しても、commit-pending全体はクラッシュ
-        # せず警告のみで完了する(run.sh全体は成功扱いのまま)。
-        iwn.write_pending(self.pending_path, issue_numbers=[16], event_keys=["event-v"])
-        self.close_retry_path.write_text("[]", encoding="utf-8")  # 構造不正
-        with mock.patch.object(iwn, "close_work_issue", side_effect=iwn.GhFetchError("network error")):
-            rc = iwn.cmd_commit_pending(self.make_args())
-        self.assertEqual(rc, 0)
-        ledger = iwn.load_ledger(self.ledger_path)
-        self.assertEqual(ledger["processed_issues"], [16], "再試行台帳の記録失敗があっても処理済み台帳は維持される")
-
-    def test_fetch_alone_never_closes_issue(self):
-        # 全工程成功前(fetchの時点)ではcloseを一切行わない。
-        issue = make_issue(11, make_packet())
-        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue]), \
-             mock.patch.object(iwn, "close_work_issue") as mock_close:
-            iwn.fetch_new_work_articles("owner/repo", self.ledger_path)
-        mock_close.assert_not_called()
-
-    def test_no_repo_means_close_is_skipped(self):
-        # --repo未指定時はcloseを試みない(後方互換・テストの明示的確認用)。
-        iwn.write_pending(self.pending_path, issue_numbers=[12], event_keys=["event-z"])
-        with mock.patch.object(iwn, "close_work_issue") as mock_close:
-            iwn.cmd_commit_pending(self.make_args(repo=None))
-        mock_close.assert_not_called()
-        ledger = iwn.load_ledger(self.ledger_path)
-        self.assertEqual(ledger["processed_issues"], [12])
-
-    def test_close_failure_keeps_committed_ledger_and_records_retry(self):
-        iwn.write_pending(self.pending_path, issue_numbers=[20], event_keys=["event-y"])
-        with mock.patch.object(iwn, "close_work_issue", side_effect=iwn.GhFetchError("network error")):
-            iwn.cmd_commit_pending(self.make_args())
-        ledger = iwn.load_ledger(self.ledger_path)
-        self.assertEqual(ledger["processed_issues"], [20], "close失敗しても台帳は取り消さない")
-        retry = json.loads(self.close_retry_path.read_text(encoding="utf-8"))
-        self.assertEqual(retry["pending_issue_numbers"], [20])
-
-    def test_next_fetch_retries_previously_failed_close(self):
-        # 前回close失敗 → 再試行台帳に記録済み、という状態から始める。
-        iwn.write_json_atomic(self.close_retry_path, {"pending_issue_numbers": [20]})
-        issue = make_issue(1, make_packet())
-        with mock.patch.object(iwn, "run_gh_issue_list", return_value=[issue]), \
-             mock.patch.object(iwn, "close_work_issue", return_value=None) as mock_close:
-            args = type(
-                "Args", (),
-                {"repo": "owner/repo", "ledger": str(self.ledger_path), "out": str(self.tmp / "raw.json"),
-                 "pending_out": str(self.pending_path), "close_retry": str(self.close_retry_path)},
-            )()
-            iwn.cmd_fetch(args)
-        mock_close.assert_any_call("owner/repo", 20)
-        self.assertFalse(self.close_retry_path.exists(), "再試行成功後は再試行台帳から削除される")
+    def test_no_close_related_functions_remain(self):
+        self.assertFalse(hasattr(iwn, "close_work_issue"))
+        self.assertFalse(hasattr(iwn, "retry_pending_closures"))
+        self.assertFalse(hasattr(iwn, "record_close_failure"))
 
 
 if __name__ == "__main__":
