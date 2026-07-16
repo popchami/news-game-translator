@@ -34,14 +34,20 @@ def run_validate(draft_text, source_articles):
         return result.returncode, draft_path.read_text(encoding="utf-8"), result.stdout, result.stderr
 
 
-def make_source(n):
+def make_source(n, source_type="rss"):
     return [
-        {"title": f"t{i}", "link": f"http://example.com/{i}", "summary": "s", "pubDate": None}
+        {
+            "title": f"t{i}",
+            "link": f"http://example.com/{i}",
+            "summary": "s",
+            "pubDate": None,
+            "sourceType": source_type,
+        }
         for i in range(n)
     ]
 
 
-def draft_block(idx, tag, body, link):
+def draft_block(idx, tag, body, link, route="RSS"):
     return (
         f"## 下書き{idx}\n"
         "### 投稿文\n"
@@ -55,15 +61,17 @@ def draft_block(idx, tag, body, link):
         "#異世界ニホン\n"
         "### メモ\n"
         f"- 元記事: テスト{idx}\n"
+        f"- 収集経路: {route}\n"
     )
 
 
-def make_draft(n, links=None, bodies=None, tags=None):
+def make_draft(n, links=None, bodies=None, tags=None, routes=None):
     links = links or [f"http://example.com/{i}" for i in range(n)]
     bodies = bodies or ["テスト本文。" for _ in range(n)]
     tags = tags or ["【異世界ニホン・国法】" for _ in range(n)]
+    routes = routes or ["RSS" for _ in range(n)]
     blocks = "\n".join(
-        draft_block(i + 1, tags[i], bodies[i], links[i]) for i in range(n)
+        draft_block(i + 1, tags[i], bodies[i], links[i], routes[i]) for i in range(n)
     )
     return "# X投稿下書き テスト\n\n" + blocks
 
@@ -170,6 +178,74 @@ class OneToOneCorrespondenceTest(unittest.TestCase):
         draft = make_draft(3)
         code, content, _, _ = run_validate(draft, make_source(3))
         self.assertEqual(code, 0, content)
+
+
+class WorkSourceTypeTest(unittest.TestCase):
+    """Phase 2a: 入力記事のsourceType(work/rss)と下書きメモの収集経路の
+    整合性を検証する。
+    """
+
+    def test_source_type_work_with_matching_route_passes(self):
+        draft = make_draft(1, routes=["Work"])
+        code, content, _, _ = run_validate(draft, make_source(1, source_type="work"))
+        self.assertEqual(code, 0, content)
+
+    def test_mixed_work_and_rss_sources_with_matching_routes_pass(self):
+        links = [f"http://example.com/{i}" for i in range(2)]
+        draft = make_draft(2, links=links, routes=["Work", "RSS"])
+        source = [
+            {"title": "t0", "link": links[0], "summary": "s", "pubDate": None, "sourceType": "work"},
+            {"title": "t1", "link": links[1], "summary": "s", "pubDate": None, "sourceType": "rss"},
+        ]
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_invalid_source_type_rejected(self):
+        draft = make_draft(1, routes=["Work"])
+        source = make_source(1, source_type="work")
+        source[0]["sourceType"] = "bogus"
+        code, _, _, stderr = run_validate(draft, source)
+        self.assertNotEqual(code, 0)
+        self.assertIn("sourceTypeが不正です", stderr)
+
+    def test_collection_route_mismatch_rejected(self):
+        # 入力はwork記事だが、メモの収集経路はRSSと記載(不一致)
+        draft = make_draft(1, routes=["RSS"])
+        code, content, _, _ = run_validate(draft, make_source(1, source_type="work"))
+        self.assertNotEqual(code, 0)
+        self.assertIn("⚠NG", content)
+        self.assertIn("収集経路が入力記事のsourceTypeと不一致", content)
+
+    def test_collection_route_missing_rejected(self):
+        draft_missing_route = (
+            "# X投稿下書き テスト\n\n"
+            "## 下書き1\n"
+            "### 投稿文\n"
+            "【異世界ニホン・国法】\n"
+            "テスト本文。\n"
+            "\n"
+            "【書記官の解説】\n"
+            "テスト用の解説文。\n"
+            "\n"
+            "http://example.com/0\n"
+            "#異世界ニホン\n"
+            "### メモ\n"
+            "- 元記事: テスト1\n"
+        )
+        code, content, _, _ = run_validate(draft_missing_route, make_source(1))
+        self.assertNotEqual(code, 0)
+        self.assertIn("⚠NG", content)
+        self.assertIn("収集経路", content)
+        self.assertIn("記載がない", content)
+
+    def test_work_link_duplicate_across_drafts_rejected(self):
+        # Phase 1の一対一対応検査(重複リンク)はsourceType=workの記事にも
+        # 同様に適用される。
+        links = ["http://example.com/0", "http://example.com/0"]
+        draft = make_draft(2, links=links, routes=["Work", "Work"])
+        code, content, _, _ = run_validate(draft, make_source(2, source_type="work"))
+        self.assertNotEqual(code, 0)
+        self.assertIn("他の下書きと重複", content)
 
 
 if __name__ == "__main__":
