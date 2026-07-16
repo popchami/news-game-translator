@@ -2,6 +2,7 @@
 import json
 import re
 import sys
+import unicodedata
 from collections import Counter
 
 from banned_terms import (
@@ -16,6 +17,25 @@ HASHTAG_LINE = "#異世界ニホン"
 HEADING_RE = re.compile(r"^(## 下書き(\d+))(.*)$", re.MULTILINE)
 NARRATIVE_RE = re.compile(r"^(.*?)(?=\n【書記官の解説】|\Z)", re.S)
 TAG_RE = re.compile(r"^【異世界ニホン・[^】]+】$")
+
+# 検査回避に使われうる不可視文字(禁止語やタグの途中に挿入して
+# 部分文字列一致をすり抜ける手口への対策)。
+INVISIBLE_CHARS = (
+    "​"  # ZERO WIDTH SPACE
+    "‌"  # ZERO WIDTH NON-JOINER
+    "‍"  # ZERO WIDTH JOINER
+    "⁠"  # WORD JOINER
+    "﻿"  # ZERO WIDTH NO-BREAK SPACE / BOM
+)
+INVISIBLE_TRANS = str.maketrans("", "", INVISIBLE_CHARS)
+
+
+def normalize_for_check(text):
+    """禁止語・タグ・ハッシュタグ・政党名の検査用に、NFKC正規化と不可視文字の
+    除去を行った文字列を作る。生成された下書きファイル自体は書き換えない
+    (文字数カウントやリンクの比較には元のtextをそのまま使う)。
+    """
+    return unicodedata.normalize("NFKC", text).translate(INVISIBLE_TRANS)
 
 
 def extract_post_section(block_text):
@@ -45,11 +65,14 @@ def extract_link_lines(post_text):
 
 def check_post(post_text, source_links, duplicate_links):
     reasons = []
-    lines = [line.strip() for line in post_text.splitlines() if line.strip()]
+    normalized_post = normalize_for_check(post_text)
+    normalized_lines = [line.strip() for line in normalized_post.splitlines() if line.strip()]
 
-    if not lines or not TAG_RE.match(lines[0]):
+    if not normalized_lines or not TAG_RE.match(normalized_lines[0]):
         reasons.append("冒頭に【異世界ニホン・◯◯】タグがない、または同じ行に余分な文字がある")
 
+    # リンクは正規化せず元の文字列で比較する(URLをNFKC正規化すると
+    # 実在するリンクを別物に変えてしまう可能性があるため)。
     link_lines = extract_link_lines(post_text)
     if not link_lines:
         reasons.append("元記事リンクなし")
@@ -61,18 +84,19 @@ def check_post(post_text, source_links, duplicate_links):
     if duplicate_links:
         reasons.append(f"元記事リンクが他の下書きと重複: {', '.join(sorted(duplicate_links))}")
 
-    hashtag_lines = [line for line in lines if line == HASHTAG_LINE]
+    hashtag_lines = [line for line in normalized_lines if line == HASHTAG_LINE]
     other_hashtag_lines = [
-        line for line in lines if line.startswith("#") and line != HASHTAG_LINE
+        line for line in normalized_lines if line.startswith("#") and line != HASHTAG_LINE
     ]
     if len(hashtag_lines) != 1:
         reasons.append(f"{HASHTAG_LINE}が{len(hashtag_lines)}個(1個である必要)")
     if other_hashtag_lines:
         reasons.append("規定外のハッシュタグ行がある")
 
-    if "【書記官の解説】" not in post_text:
+    if "【書記官の解説】" not in normalized_post:
         reasons.append("【書記官の解説】がない")
 
+    # 文字数は正規化前の元の文字列で数える(表示上の見た目を尊重するため)。
     narrative = extract_narrative(post_text)
     body_lines = []
     for line in narrative.splitlines():
@@ -89,15 +113,15 @@ def check_post(post_text, source_links, duplicate_links):
         reasons.append(f"{POST_BODY_LIMIT}字超過({len(body)}字、物語本文のみ)")
 
     for term in FORBIDDEN_TERMS:
-        if term in post_text:
+        if term in normalized_post:
             reasons.append(f"禁止語「{term}」を検出")
 
     for term, context_markers in CONTEXTUAL_FORBIDDEN_TERMS.items():
-        if term in post_text and any(marker in post_text for marker in context_markers):
+        if term in normalized_post and any(marker in normalized_post for marker in context_markers):
             reasons.append(f"禁止語「{term}」を法案・選挙の文脈で検出")
 
     for term in FORBIDDEN_PARTY_KATAKANA:
-        if term in post_text:
+        if term in normalized_post:
             reasons.append(f"政党名カタカナ変換「{term}」を検出")
 
     return reasons
@@ -132,12 +156,13 @@ def main():
     if total == 0:
         file_level_reasons.append("下書きが0件です")
 
-    if source_count is not None and total > source_count:
-        file_level_reasons.append(f"下書き件数({total})が入力記事数({source_count})を超えています")
+    if source_count is not None and total != source_count:
+        file_level_reasons.append(f"下書き件数({total})が入力記事数({source_count})と一致しません")
 
-    # 1回目の走査: 各下書きの投稿文とリンクを収集し、リンクの重複を検出する
+    # 1回目の走査: 各下書きの投稿文とリンクを収集し、リンクの重複・欠落を検出する
     blocks = []
     link_counter = Counter()
+    all_used_links = set()
     for idx, m in enumerate(headings):
         block_start = m.end()
         block_end = headings[idx + 1].start() if idx + 1 < total else len(content)
@@ -145,9 +170,18 @@ def main():
         post_text = extract_post_section(block_text)
         blocks.append((m, post_text))
         if post_text is not None:
-            link_counter.update(set(extract_link_lines(post_text)))
+            draft_links = extract_link_lines(post_text)
+            link_counter.update(set(draft_links))
+            all_used_links.update(draft_links)
 
     duplicated_links = {link for link, count in link_counter.items() if count > 1}
+
+    if source_links is not None:
+        missing_links = source_links - all_used_links
+        if missing_links:
+            file_level_reasons.append(
+                f"入力記事のリンクが下書きに使われていません: {', '.join(sorted(missing_links))}"
+            )
 
     # 2回目の走査: 各下書きを検証し、見出しを書き換える
     for m, post_text in blocks:
