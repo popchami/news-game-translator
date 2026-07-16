@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
+from news_schema import normalize_rss_article
+
 JST = timezone(timedelta(hours=9))
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FEEDS_FILE = os.path.join(BASE_DIR, "config", "feeds.txt")
@@ -113,12 +115,12 @@ def main():
     selected = select(dedupe(all_items), MAX_ARTICLES)
 
     output = [
-        {
-            "title": item["title"],
-            "link": item["link"],
-            "summary": item["summary"],
-            "pubDate": item["pub_dt"].isoformat() if item["pub_dt"] else None,
-        }
+        normalize_rss_article(
+            title=item["title"],
+            link=item["link"],
+            summary=item["summary"],
+            pub_date=item["pub_dt"].isoformat() if item["pub_dt"] else None,
+        )
         for item in selected
     ]
 

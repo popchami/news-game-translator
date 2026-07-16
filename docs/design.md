@@ -91,6 +91,34 @@ data/raw/2026-07-16.json
 
 ---
 
+## 3.5 Work Newsの取り込み(Phase 2a)
+
+ChatGPT WorkがGitHub Issueへ登録したニュース事実パック(Work News
+Packet)を `scripts/import_work_news.py` が取得し、RSS記事と同じ共通
+スキーマへ正規化して `data/raw/*.json` へ書き出す。パケット形式・
+Issue単位・重複管理・run.shの分岐の詳細は `docs/news-packet.md` を
+参照。
+
+- Workデータがない場合(新規Issueなし)、gh未認証・通信失敗、Issueの
+  JSON不正で有効な記事が0件の場合は、既存のRSS収集(`scripts/collect.py`)
+  へフォールバックする。
+- 同一実行内でWork記事とRSS記事は混在させない。
+- 処理済みIssue番号・処理済みeventKeyの台帳(`data/state/
+  processed_work_issues.json`、端末固有・gitignore対象)は、
+  `claude -p` 変換と `validate.py` 全件合格を経て `drafts/` へ正式移動
+  した後にだけ更新する。
+- Termux側からGitHubへの書き込みは一切行わない(読み取り専用。close・
+  コメント・ラベル・本文・タイトルの変更・Issue削除のいずれも行わない)。
+  含まれる全eventKeyが既に処理済みのIssue(重複記事だけのIssue)は、
+  ニュースを再変換せずにIssue番号だけを端末内台帳へ記録する。Issue自体
+  はGitHub上でopenのまま残るが、台帳により再取り込みは防止される。
+- 1回のfetchで取り込む新規記事は、Issueごとではなく全Issue合計で最大
+  10件までとする。候補Issueはcreated_at昇順(oldest-first)で決定的に
+  処理し、1つのIssueを跨いで記事を分割しない。合計が上限を超える
+  Issueは次回に持ち越す。詳細は `docs/news-packet.md` を参照。
+
+---
+
 ## 4. 変換エンジン(translate)
 
 ### Claude Codeの呼び出し方
@@ -154,6 +182,7 @@ https://...(元記事リンク)
 - 元記事: (タイトル)
 - 要約: (中立要約の原文 ※投稿しない、チャミの事実確認用)
 - 注意: (AIが自信のない点があれば明記)
+- 収集経路: (RSS または Work。入力記事のsourceTypeに対応)
 - ※この要約はRSSの見出し・概要のみに基づく。投稿前に必ず元記事リンクで本文を確認すること
 ```
 
@@ -220,12 +249,16 @@ news-game-translator/
 │   └── glossary.md            # 用語対応表(チャミが育てる)
 ├── scripts/
 │   ├── collect.py             # RSS収集
+│   ├── import_work_news.py    # Work News Packetの取り込み(Phase 2a)
+│   ├── news_schema.py         # Work/RSS共通の記事スキーマ定義
 │   └── validate.py            # 下書きの機械検証
 ├── data/
-│   └── raw/                   # 収集した記事データ(日付ごと)
+│   ├── raw/                   # 収集した記事データ(日付ごと)
+│   └── state/                 # 処理済みIssue/eventKey台帳(端末固有、gitignore対象)
 ├── drafts/                    # X投稿下書き(日付ごと)
 ├── docs/
 │   ├── design.md              # この設計書
+│   ├── news-packet.md         # Work News Packet仕様(Phase 2a)
 │   ├── worldbook.md           # 世界観・設計思想の正本(人間向け)
 │   └── operation.md           # 試験運用メモ
 ├── tests/
@@ -287,3 +320,6 @@ Kick×Kickとは完全に別リポジトリ・別ディレクトリとする(混
 | v0.2 | 2026-07-16 | Codexレビュー反映(インジェクション対策、出力原子性、機械検証、体制明文化、4境界) |
 | v0.3(Phase 1) | 2026-07-16 | worldbook.md/runtime_rules.md/glossary.md/translate.mdの4文書構造を確立。§4/§5/§7の陳腐化した記述(v0.1時代の用語表・単層出力例・旧ディレクトリ構成)を現行に同期。validate.pyの強化仕様(全件合格でなければ非ゼロ終了)を反映 |
 | v0.4(Phase 1完了) | 2026-07-16 | validate.pyにUnicode正規化(NFKC・不可視文字除去)と入力記事数・リンクの一対一対応チェックを追加。§8.5「validate.pyの限界と多重防御」を新設し、同義語による回避は検出できない既知の設計限界と、4段階の多重防御方針を明記 |
+| v0.5(Phase 2a) | 2026-07-17 | §3.5「Work Newsの取り込み」を新設。ChatGPT WorkがGitHub Issueへ登録するWork News Packetの取り込み(scripts/import_work_news.py)とRSSとの共通スキーマ化(scripts/news_schema.py)、gh未認証・Issue不正時のRSSフォールバック、処理済みIssue/eventKey台帳を追加。詳細はdocs/news-packet.md参照 |
+| v0.6(Phase 2a追加、後にv0.7で取り消し) | 2026-07-17 | 全工程成功後のGitHub Issue close機能を追加(gh issue closeのみ許可)。close失敗時の再試行台帳、duplicate_only状態を追加。詳細はdocs/news-packet.md参照 |
+| v0.7(Phase 2a修正) | 2026-07-17 | v0.6のIssue close機能を撤回し、Termuxを再びGitHub Issuesの読み取り専用に戻した(close・再試行台帳を削除。Issueはopenのままだが端末内台帳で重複取り込みを防止)。1回のfetchで取り込む新規記事数をIssueごとではなく全Issue合計で最大10件に変更し、created_at昇順(oldest-first)でIssueを選択・1つのIssueを跨いで記事を分割しない仕様を追加。articleの配列項目は各要素が文字列でなければ拒否する検査を追加 |

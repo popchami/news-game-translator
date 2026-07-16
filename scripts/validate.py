@@ -17,6 +17,11 @@ HASHTAG_LINE = "#異世界ニホン"
 HEADING_RE = re.compile(r"^(## 下書き(\d+))(.*)$", re.MULTILINE)
 NARRATIVE_RE = re.compile(r"^(.*?)(?=\n【書記官の解説】|\Z)", re.S)
 TAG_RE = re.compile(r"^【異世界ニホン・[^】]+】$")
+MEMO_RE = re.compile(r"### メモ\s*\n(.*?)\Z", re.S)
+COLLECTION_ROUTE_RE = re.compile(r"^-\s*収集経路:\s*(\S+)\s*$", re.MULTILINE)
+
+# 入力記事のsourceType(work/rss)と、下書きメモに書くべき収集経路表記の対応。
+SOURCE_TYPE_LABELS = {"work": "Work", "rss": "RSS"}
 
 # 検査回避に使われうる不可視文字(禁止語やタグの途中に挿入して
 # 部分文字列一致をすり抜ける手口への対策)。
@@ -50,20 +55,24 @@ def extract_narrative(post_text):
     return m.group(1) if m else post_text
 
 
-def load_source_links(source_path):
+def extract_memo_section(block_text):
+    m = MEMO_RE.search(block_text)
+    return m.group(1) if m else None
+
+
+def load_source_articles(source_path):
     with open(source_path, encoding="utf-8") as f:
         articles = json.load(f)
     if not isinstance(articles, list):
         raise ValueError("入力JSONのルートは配列である必要があります")
-    links = {a["link"] for a in articles if isinstance(a, dict) and a.get("link")}
-    return links, len(articles)
+    return articles
 
 
 def extract_link_lines(post_text):
     return [line.strip() for line in post_text.splitlines() if line.strip().startswith("http")]
 
 
-def check_post(post_text, source_links, duplicate_links):
+def check_post(post_text, source_links, duplicate_links, memo_text=None, link_source_type=None):
     reasons = []
     normalized_post = normalize_for_check(post_text)
     normalized_lines = [line.strip() for line in normalized_post.splitlines() if line.strip()]
@@ -124,6 +133,21 @@ def check_post(post_text, source_links, duplicate_links):
         if term in normalized_post:
             reasons.append(f"政党名カタカナ変換「{term}」を検出")
 
+    if link_source_type is not None:
+        expected_types = {
+            link_source_type[link] for link in link_lines if link in link_source_type
+        }
+        if len(expected_types) == 1:
+            expected_label = SOURCE_TYPE_LABELS.get(next(iter(expected_types)))
+            route_match = COLLECTION_ROUTE_RE.search(memo_text or "")
+            if not route_match:
+                reasons.append("メモに「収集経路: Work」または「収集経路: RSS」の記載がない")
+            elif route_match.group(1) != expected_label:
+                reasons.append(
+                    f"メモの収集経路が入力記事のsourceTypeと不一致"
+                    f"(記載: {route_match.group(1)}, 期待: {expected_label})"
+                )
+
     return reasons
 
 
@@ -140,11 +164,30 @@ def main():
 
     source_links = None
     source_count = None
+    link_source_type = None
     file_level_reasons = []
 
     if source_path:
         try:
-            source_links, source_count = load_source_links(source_path)
+            source_articles = load_source_articles(source_path)
+            source_count = len(source_articles)
+            link_source_type = {
+                a["link"]: a.get("sourceType")
+                for a in source_articles
+                if isinstance(a, dict) and a.get("link")
+            }
+            source_links = set(link_source_type.keys())
+            invalid_source_types = sorted(
+                {
+                    str(a.get("sourceType"))
+                    for a in source_articles
+                    if isinstance(a, dict) and a.get("sourceType") not in ("work", "rss")
+                }
+            )
+            if invalid_source_types:
+                file_level_reasons.append(
+                    f"入力記事のsourceTypeが不正です(workまたはrssである必要): {', '.join(invalid_source_types)}"
+                )
         except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
             file_level_reasons.append(f"入力JSON({source_path})の読み込みに失敗: {e}")
 
@@ -168,7 +211,8 @@ def main():
         block_end = headings[idx + 1].start() if idx + 1 < total else len(content)
         block_text = content[block_start:block_end]
         post_text = extract_post_section(block_text)
-        blocks.append((m, post_text))
+        memo_text = extract_memo_section(block_text)
+        blocks.append((m, post_text, memo_text))
         if post_text is not None:
             draft_links = extract_link_lines(post_text)
             # setにせず実際の出現回数をそのまま数える。同一下書き内で
@@ -187,12 +231,18 @@ def main():
             )
 
     # 2回目の走査: 各下書きを検証し、見出しを書き換える
-    for m, post_text in blocks:
+    for m, post_text, memo_text in blocks:
         if post_text is None:
             reasons = ["投稿文セクションが見つかりません"]
         else:
             this_draft_links = set(extract_link_lines(post_text))
-            reasons = check_post(post_text, source_links, this_draft_links & duplicated_links)
+            reasons = check_post(
+                post_text,
+                source_links,
+                this_draft_links & duplicated_links,
+                memo_text,
+                link_source_type,
+            )
 
         if reasons:
             new_heading = f"{m.group(1)} ⚠NG({', '.join(reasons)})"

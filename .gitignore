@@ -2,5 +2,7 @@ tmp/
 data/raw/*.json
 drafts/*.md
 drafts/.tmp_*
+data/state/processed_work_issues.json
+data/state/.pending_*.json
 __pycache__/
 *.pyc
