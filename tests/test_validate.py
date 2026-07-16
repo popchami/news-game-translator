@@ -100,6 +100,28 @@ class UnicodeEvasionTest(unittest.TestCase):
         code, content, _, _ = run_validate(draft, make_source(1))
         self.assertEqual(code, 0, content)
 
+    def test_halfwidth_katakana_party_name_is_detected_via_nfkc(self):
+        # 半角カナの「ｼﾞﾐﾝ党」はNFKC正規化で「ジミン党」になる。
+        # 正規化なしでは FORBIDDEN_PARTY_KATAKANA と文字列一致しないため、
+        # NFKC正規化が実際に効いていることを直接証明するテスト。
+        body = "ｼﾞﾐﾝ党が勝利した。"
+        draft = make_draft(1, bodies=[body])
+        code, content, _, _ = run_validate(draft, make_source(1))
+        self.assertNotEqual(code, 0)
+        self.assertIn("⚠NG", content)
+        self.assertIn("政党名カタカナ変換", content)
+
+    def test_output_file_preserves_original_text_unnormalized(self):
+        # 検査は正規化済み文字列で行うが、ファイルへ書き戻す本文は
+        # 元の(正規化前の)文字列のままである(下書き自体は書き換えない)。
+        body = "中央評議会の王​国議会でクエストが進む。"  # 王<ZWSP>国議会
+        draft = make_draft(1, bodies=[body])
+        code, content, _, _ = run_validate(draft, make_source(1))
+        self.assertNotEqual(code, 0)
+        # 元のゼロ幅文字入り文字列がそのまま本文に残っている
+        # (正規化後の「王国議会」に書き換えられていない)。
+        self.assertIn("王​国議会", content)
+
 
 class OneToOneCorrespondenceTest(unittest.TestCase):
     def test_fewer_drafts_than_articles_fails(self):
@@ -112,15 +134,37 @@ class OneToOneCorrespondenceTest(unittest.TestCase):
         links = [f"http://example.com/{i}" for i in range(10)]
         links[9] = links[0]  # 9番目を0番目と重複させる(本来の9番目は欠落する)
         draft = make_draft(10, links=links)
-        code, content, _, _ = run_validate(draft, make_source(10))
+        code, content, _, stderr = run_validate(draft, make_source(10))
         self.assertNotEqual(code, 0)
+        # 重複は下書きの見出しにNGとして現れる
         self.assertIn("⚠NG", content)
+        self.assertIn("他の下書きと重複", content)
+        # 欠落は入力記事側のリンクがどれも使われていないため、
+        # ファイルレベルのエラーとしてstderrに現れる
+        self.assertIn("使われていません", stderr)
+        self.assertIn("http://example.com/9", stderr)
 
-    def test_unrelated_link_fails(self):
-        draft = make_draft(1, links=["http://example.com/not-in-source"])
+    def test_duplicate_link_within_single_draft_fails(self):
+        # 同じ下書きの中で同一URLを2回書いた場合も重複として検出する
+        # (下書き間だけでなく、1下書き内の重複も許さない)。
+        body = (
+            "テスト本文。\n"
+            "http://example.com/0"
+        )
+        draft = make_draft(1, bodies=[body])
         code, content, _, _ = run_validate(draft, make_source(1))
         self.assertNotEqual(code, 0)
         self.assertIn("⚠NG", content)
+        self.assertIn("他の下書きと重複", content)
+
+    def test_unrelated_link_fails(self):
+        draft = make_draft(1, links=["http://example.com/not-in-source"])
+        code, content, _, stderr = run_validate(draft, make_source(1))
+        self.assertNotEqual(code, 0)
+        self.assertIn("⚠NG", content)
+        self.assertIn("入力JSONのlinkと一致しない", content)
+        # 入力側の唯一のリンクも使われていないため、こちらも欠落として現れる
+        self.assertIn("使われていません", stderr)
 
     def test_exact_one_to_one_passes(self):
         draft = make_draft(3)

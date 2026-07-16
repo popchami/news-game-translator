@@ -171,7 +171,10 @@ def main():
         blocks.append((m, post_text))
         if post_text is not None:
             draft_links = extract_link_lines(post_text)
-            link_counter.update(set(draft_links))
+            # setにせず実際の出現回数をそのまま数える。同一下書き内で
+            # 同じリンクを2回書いた場合も「重複」として検出するため
+            # (入力の各リンクが厳密に1回ずつ使われることを保証する)。
+            link_counter.update(draft_links)
             all_used_links.update(draft_links)
 
     duplicated_links = {link for link, count in link_counter.items() if count > 1}
