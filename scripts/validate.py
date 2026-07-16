@@ -2,9 +2,11 @@
 import re
 import sys
 
-POST_BODY_LIMIT = 140
+POST_BODY_LIMIT = 130
 
 HEADING_RE = re.compile(r"^(## 下書き(\d+))(.*)$", re.MULTILINE)
+
+NARRATIVE_RE = re.compile(r"^(.*?)(?=\n【書記官の解説】|\Z)", re.S)
 
 
 def extract_post_section(block_text):
@@ -14,16 +16,25 @@ def extract_post_section(block_text):
     return m.group(1)
 
 
+def extract_narrative(post_text):
+    m = NARRATIVE_RE.match(post_text)
+    return m.group(1) if m else post_text
+
+
 def check_post(post_text):
     reasons = []
-    has_link = False
+
+    has_link = any(line.strip().startswith("http") for line in post_text.splitlines())
+    if not has_link:
+        reasons.append("元記事リンクなし")
+
+    narrative = extract_narrative(post_text)
     body_lines = []
-    for line in post_text.splitlines():
+    for line in narrative.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("http"):
-            has_link = True
             continue
         if stripped.startswith("#"):
             continue
@@ -31,9 +42,8 @@ def check_post(post_text):
 
     body = "".join(body_lines)
     if len(body) > POST_BODY_LIMIT:
-        reasons.append(f"{POST_BODY_LIMIT}字超過({len(body)}字)")
-    if not has_link:
-        reasons.append("元記事リンクなし")
+        reasons.append(f"{POST_BODY_LIMIT}字超過({len(body)}字、物語本文のみ)")
+
     return reasons
 
 
