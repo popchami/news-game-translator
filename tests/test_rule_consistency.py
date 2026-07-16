@@ -15,11 +15,14 @@ docs/worldbook.md に、過去に存在した矛盾したルール(王国議会�
 3. 「使ってよい語」の一覧の箇条書き項目(`- 禁止語`)として現れる
 4. 【異世界ニホン・◯◯】タグで始まる投稿例ブロックの中に現れる
 
-ただし banned_terms.FORBIDDEN_MAPPING_ONLY_TERMS(「クエスト受注」
-「クエスト失敗」)は、上記1・2(変換先としての使用)のみを検査する。
-これらの語は実際のクエスト(政策実行)の結果を描写する語として
-投稿例やルール説明文に正当に現れうるため(例: docs/worldbook.md の
-いじめ問題の投稿例)、3・4のパターンでは検査しない。
+ただし banned_terms.CONTEXTUAL_FORBIDDEN_TERMS(「クエスト受注」
+「クエスト失敗」「正式実装」「選抜戦」)は、上記1・2(変換先としての
+使用)のみを検査する。これらの語は実際のクエスト(政策実行)の結果や
+スポーツなど、法案・選挙と無関係な文脈で正当に現れうるため(例:
+docs/worldbook.md のいじめ問題の投稿例にある「クエスト失敗の責任を
+一人に押し付ける」)、3・4のパターンでは検査しない。下書き本文への
+出現は、法案・選挙の文脈マーカー語との共起を条件に scripts/validate.py
+が別途検出する。
 
 docs/worldbook.md §16は「旧記載→新基準」を対比させる歴史的な記録であり、
 旧記載側に禁止語が矢印付きで登場するのは意図的なため、検査対象から除外する。
@@ -35,7 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from banned_terms import (  # noqa: E402
-    FORBIDDEN_MAPPING_ONLY_TERMS,
+    CONTEXTUAL_FORBIDDEN_TERMS,
     FORBIDDEN_PARTY_KATAKANA,
     FORBIDDEN_TERMS,
 )
@@ -151,22 +154,23 @@ class RuleConsistencyTest(unittest.TestCase):
                     f"変換先・許可リスト・投稿例として再混入しています: {matches}",
                 )
 
-    def test_mapping_only_terms_not_used_as_mapping(self):
-        """「クエスト受注」「クエスト失敗」は変換先としての再混入のみ検査する。
+    def test_contextual_terms_not_used_as_mapping(self):
+        """文脈依存の禁止語は変換先としての再混入のみ検査する。
 
-        投稿例・箇条書きでの正当な使用(実際のクエストの結果を描写する
-        用法)は許可するため、find_mapping_usages(テーブル/矢印)のみを
-        使う(find_bullet_list_usages・find_example_post_usagesは使わない)。
+        投稿例・箇条書きでの正当な使用(実際のクエストの結果やスポーツ等、
+        法案・選挙と無関係な文脈での用法)は許可するため、
+        find_mapping_usages(テーブル/矢印)のみを使う
+        (find_bullet_list_usages・find_example_post_usagesは使わない)。
         """
         for path in TARGET_FILES:
             text = strip_excluded_sections(path, path.read_text(encoding="utf-8"))
-            for term in FORBIDDEN_MAPPING_ONLY_TERMS:
+            for term in CONTEXTUAL_FORBIDDEN_TERMS:
                 matches = find_mapping_usages(text, term)
                 self.assertEqual(
                     matches,
                     [],
                     f"{path.relative_to(ROOT)} に「{term}」が変換先として"
-                    f"再混入しています(法案の審議入り・否決に使用不可): {matches}",
+                    f"再混入しています(法案・選挙関連の記事に使用不可): {matches}",
                 )
 
 

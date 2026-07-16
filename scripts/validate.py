@@ -4,7 +4,11 @@ import re
 import sys
 from collections import Counter
 
-from banned_terms import FORBIDDEN_PARTY_KATAKANA, FORBIDDEN_TERMS
+from banned_terms import (
+    CONTEXTUAL_FORBIDDEN_TERMS,
+    FORBIDDEN_PARTY_KATAKANA,
+    FORBIDDEN_TERMS,
+)
 
 POST_BODY_LIMIT = 130
 HASHTAG_LINE = "#異世界ニホン"
@@ -87,6 +91,10 @@ def check_post(post_text, source_links, duplicate_links):
     for term in FORBIDDEN_TERMS:
         if term in post_text:
             reasons.append(f"禁止語「{term}」を検出")
+
+    for term, context_markers in CONTEXTUAL_FORBIDDEN_TERMS.items():
+        if term in post_text and any(marker in post_text for marker in context_markers):
+            reasons.append(f"禁止語「{term}」を法案・選挙の文脈で検出")
 
     for term in FORBIDDEN_PARTY_KATAKANA:
         if term in post_text:
