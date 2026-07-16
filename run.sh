@@ -21,6 +21,9 @@ if [ ! -s "${TMP}" ]; then
 fi
 
 echo "== validate =="
-python3 scripts/validate.py "${TMP}"
+if ! python3 scripts/validate.py "${TMP}" "${RAW}"; then
+  echo "[ERROR] validate失敗: 構造違反が見つかりました。検査結果は ${TMP} を確認してください" >&2
+  exit 1
+fi
 mv "${TMP}" "${OUT}"
 echo "完成: ${OUT}"
