@@ -1,2 +1,4 @@
 tmp/
 data/raw/*.json
+drafts/*.md
+drafts/.tmp_*
