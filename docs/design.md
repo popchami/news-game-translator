@@ -79,6 +79,31 @@ RSS(サイトが公式配信する「見出し+概要+リンク」のデータ)�
 - 記事本文のスクレイピング(ページを機械的にコピーすること)はしない
 - 1回の実行で処理する記事数は最大10件(利用枠と下書きの質のバランス)
 
+### 日またぎ重複の除外(Phase 2c)
+
+RSSは同じ記事が翌日以降も配信され続けることがあるため、`link`の
+**URL完全一致**のみを機械的な重複と判定し、`claude -p`変換の前に除外
+する(タイトルの一致や意味的な類似だけでは除外しない)。除外後に候補が
+残っていれば、既存の優先順位(公開日時降順)を維持したまま最大10件まで
+補充する。
+
+過去に下書き化したlinkは `data/state/recent_rss_links.json`
+(直近30日分、端末固有・gitignore対象。構造例は
+`data/state/recent_rss_links.example.json`)に記録する。この台帳の
+確定更新は、`claude -p`変換・`validate.py`全件合格・`drafts/`への正式
+移動まですべて成功した後にのみ行う(`scripts/collect.py`は台帳を一切
+書き換えず、今回選択したlinkを一時ファイルへ書き出すのみ)。台帳が
+存在しない場合、`data/raw/*.json`(sourceType=rss)と同日の
+`drafts/*.md`に実在するlinkが一致する組み合わせだけを初回復元する。
+
+重複除外の結果、新規記事が0件になった場合は`claude -p`・`validate.py`
+を呼ばずに正常終了する(空の下書きファイルは作らない)。
+
+同日の下書き(`drafts/YYYY-MM-DD.md`)が既に存在する場合、`run.sh`は
+収集・変換・検証を一切行わずに正常終了する(上書き防止)。
+
+詳細は `scripts/rss_dedup.py` を参照。
+
 ### 保存形式
 
 ```
@@ -323,3 +348,4 @@ Kick×Kickとは完全に別リポジトリ・別ディレクトリとする(混
 | v0.5(Phase 2a) | 2026-07-17 | §3.5「Work Newsの取り込み」を新設。ChatGPT WorkがGitHub Issueへ登録するWork News Packetの取り込み(scripts/import_work_news.py)とRSSとの共通スキーマ化(scripts/news_schema.py)、gh未認証・Issue不正時のRSSフォールバック、処理済みIssue/eventKey台帳を追加。詳細はdocs/news-packet.md参照 |
 | v0.6(Phase 2a追加、後にv0.7で取り消し) | 2026-07-17 | 全工程成功後のGitHub Issue close機能を追加(gh issue closeのみ許可)。close失敗時の再試行台帳、duplicate_only状態を追加。詳細はdocs/news-packet.md参照 |
 | v0.7(Phase 2a修正) | 2026-07-17 | v0.6のIssue close機能を撤回し、Termuxを再びGitHub Issuesの読み取り専用に戻した(close・再試行台帳を削除。Issueはopenのままだが端末内台帳で重複取り込みを防止)。1回のfetchで取り込む新規記事数をIssueごとではなく全Issue合計で最大10件に変更し、created_at昇順(oldest-first)でIssueを選択・1つのIssueを跨いで記事を分割しない仕様を追加。articleの配列項目は各要素が文字列でなければ拒否する検査を追加 |
+| v0.8(Phase 2c) | 2026-07-17 | RSSの日またぎ重複防止(URL完全一致のみ除外、data/state/recent_rss_links.json、直近30日保持、全工程成功後だけ確定更新、過去実績からの初回復元)と、同日下書きの上書き防止(drafts/YYYY-MM-DD.mdが既に存在する場合は収集・変換・検証を行わず正常終了)を追加。translate.mdに重複確認の質問を禁止する範囲限定のルールを追加(皇室・中立性・禁止語等の既存ルールは変更なし) |

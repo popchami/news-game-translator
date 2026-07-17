@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import os
 import sys
@@ -8,15 +9,23 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
+import rss_dedup
 from news_schema import normalize_rss_article
 
 JST = timezone(timedelta(hours=9))
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FEEDS_FILE = os.path.join(BASE_DIR, "config", "feeds.txt")
 RAW_DIR = os.path.join(BASE_DIR, "data", "raw")
+DRAFTS_DIR = os.path.join(BASE_DIR, "drafts")
+STATE_DIR = os.path.join(BASE_DIR, "data", "state")
 USER_AGENT = "news-game-translator/0.1 (personal use)"
 TIMEOUT = 30
 MAX_ARTICLES = 10
+
+# 新規記事0件(重複除外の結果を含む)を示す終了コード。全URL取得失敗
+# (exit 1)とは区別し、run.sh側でclaude -p/validate.pyを呼ばずに正常
+#終了できるようにする。
+EXIT_NO_NEW_ARTICLES = 2
 
 
 def read_feeds(path):
@@ -91,7 +100,16 @@ def select(items, limit):
     return (dated + undated)[:limit]
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="RSS収集(日またぎ重複除外込み)")
+    parser.add_argument("--out", default=None, help="出力先(未指定時はdata/raw/{today}.json)")
+    parser.add_argument("--pending-out", default=None, help="今回選択したlinkの一時記録先")
+    parser.add_argument("--recent-links", default=None, help="RSSリンク台帳(未指定時はdata/state/recent_rss_links.json)")
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     urls = read_feeds(FEEDS_FILE)
 
     all_items = []
@@ -112,7 +130,39 @@ def main():
         print("[ERROR] 全URLの取得に失敗しました。ファイルは書き込みません。", file=sys.stderr)
         sys.exit(1)
 
-    selected = select(dedupe(all_items), MAX_ARTICLES)
+    date_str = datetime.now(JST).strftime("%Y-%m-%d")
+    today = datetime.now(JST).date()
+
+    out_path = args.out or os.path.join(RAW_DIR, f"{date_str}.json")
+    pending_path = args.pending_out or os.path.join(STATE_DIR, f".pending_rss_links_{date_str}.json")
+    recent_links_path = args.recent_links or rss_dedup.DEFAULT_LEDGER_PATH
+
+    # 台帳ファイルへは一切書き込まない(collect.pyは台帳を確定更新しない)。
+    # ファイルが存在しなければ、フィルタ用に履歴からメモリ上でのみ復元する。
+    # 実ファイルへの書き込みはcommit_pending(全工程成功後)でのみ行う。
+    if os.path.exists(recent_links_path):
+        try:
+            recent_links = rss_dedup.load_recent_rss_links(recent_links_path)
+        except (OSError, json.JSONDecodeError, ValueError) as e:
+            print(f"[ERROR] RSSリンク台帳({recent_links_path})の読み込みに失敗しました: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        recent_links = rss_dedup.bootstrap_from_history(RAW_DIR, DRAFTS_DIR, today)
+        print(
+            f"[INFO] RSSリンク台帳がまだ存在しないため、過去実績から一時的に復元しました"
+            f"({len(recent_links)}件、ファイルへの書き込みは今回の全工程成功後に行われます)",
+            file=sys.stderr,
+        )
+
+    deduped = dedupe(all_items)
+    non_duplicate = rss_dedup.filter_new_items(deduped, recent_links)
+    excluded_count = len(deduped) - len(non_duplicate)
+
+    selected = select(non_duplicate, MAX_ARTICLES)
+
+    if not selected:
+        print("本日の新規RSS記事はありません", file=sys.stderr)
+        sys.exit(EXIT_NO_NEW_ARTICLES)
 
     output = [
         normalize_rss_article(
@@ -124,17 +174,12 @@ def main():
         for item in selected
     ]
 
-    date_str = datetime.now(JST).strftime("%Y-%m-%d")
-    os.makedirs(RAW_DIR, exist_ok=True)
-    tmp_path = os.path.join(RAW_DIR, f".tmp_{date_str}.json")
-    final_path = os.path.join(RAW_DIR, f"{date_str}.json")
+    rss_dedup.write_json_atomic(out_path, output)
+    rss_dedup.write_pending(pending_path, [item["link"] for item in selected])
 
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-    os.replace(tmp_path, final_path)
-
-    print(f"取得{fetched_count}件 → 採用{len(selected)}件 → {final_path}")
+    print(
+        f"取得{fetched_count}件 → 重複除外{excluded_count}件 → 採用{len(selected)}件 → {out_path}"
+    )
 
 
 if __name__ == "__main__":
