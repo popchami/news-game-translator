@@ -9,8 +9,17 @@ OUT="drafts/${TODAY}.md"
 WORK_PENDING="data/state/.pending_${TODAY}.json"
 LEDGER="data/state/processed_work_issues.json"
 WORK_REPO="popchami/news-game-translator"
+RSS_LEDGER="data/state/recent_rss_links.json"
+RSS_PENDING="data/state/.pending_rss_links_${TODAY}.json"
 
-rm -f "${WORK_PENDING}"
+# 同日の下書きが既に完成している場合は何もしない(上書き防止)。
+# Work Issueの確認すら行わない(未処理のWork Issueは翌日の実行対象として残す)。
+if [ -s "${OUT}" ]; then
+  echo "本日分は既に完成済みです: ${OUT}"
+  exit 0
+fi
+
+rm -f "${WORK_PENDING}" "${RSS_PENDING}"
 
 SOURCE=rss
 echo "== Work Issue確認 =="
@@ -41,7 +50,21 @@ esac
 
 if [ "${SOURCE}" = "rss" ]; then
   echo "== collect(RSS) =="
-  python3 scripts/collect.py
+  # collect.pyの終了コードは3値(0=新規記事あり/2=重複除外の結果0件/
+  # その他=全URL取得失敗)を使う。
+  set +e
+  python3 scripts/collect.py \
+    --out "${RAW}" --pending-out "${RSS_PENDING}" --recent-links "${RSS_LEDGER}"
+  COLLECT_RC=$?
+  set -e
+
+  if [ "${COLLECT_RC}" -eq 2 ]; then
+    echo "本日の新規RSS記事はありません"
+    exit 0
+  elif [ "${COLLECT_RC}" -ne 0 ]; then
+    echo "[ERROR] RSS収集に失敗しました" >&2
+    exit 1
+  fi
 fi
 
 echo "== translate =="
@@ -66,6 +89,11 @@ if [ "${SOURCE}" = "work" ]; then
   python3 scripts/import_work_news.py commit-pending \
     --pending "${WORK_PENDING}" --ledger "${LEDGER}"
 fi
-rm -f "${WORK_PENDING}"
+if [ "${SOURCE}" = "rss" ]; then
+  echo "== RSSリンク台帳を更新 =="
+  python3 scripts/rss_dedup.py commit-pending \
+    --pending "${RSS_PENDING}" --ledger "${RSS_LEDGER}"
+fi
+rm -f "${WORK_PENDING}" "${RSS_PENDING}"
 
 echo "完成: ${OUT}(収集経路: ${SOURCE})"
