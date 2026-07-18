@@ -8,7 +8,8 @@ from collections import Counter
 from banned_terms import (
     CONTEXTUAL_FORBIDDEN_TERMS,
     FORBIDDEN_PARTY_KATAKANA,
-    FORBIDDEN_TERMS,
+    KINGDOM_SMELL_TERMS,
+    ROYALTY_ADJACENT_TERMS,
 )
 
 POST_BODY_LIMIT = 130
@@ -22,6 +23,15 @@ COLLECTION_ROUTE_RE = re.compile(r"^-\s*収集経路:\s*(\S+)\s*$", re.MULTILINE
 
 # 入力記事のsourceType(work/rss)と、下書きメモに書くべき収集経路表記の対応。
 SOURCE_TYPE_LABELS = {"work": "Work", "rss": "RSS"}
+
+# 「ニホン」(助詞「の」の有無いずれも)に王制語彙が直接隣接する固定
+# 複合表現だけを検出する(例:「ニホンの女王」「ニホン国王」)。「英国の
+# 女王」のように「ニホン」に隣接しない場合は一致しない。「統治する」等、
+# 文全体の意味理解が必要な主張はここでは判定しない(banned_terms.pyの
+# モジュールdocstring参照)。
+NIHON_ROYALTY_ADJACENT_RE = re.compile(
+    "ニホン(?:の)?(?:" + "|".join(re.escape(t) for t in ROYALTY_ADJACENT_TERMS) + ")"
+)
 
 # 検査回避に使われうる不可視文字(禁止語やタグの途中に挿入して
 # 部分文字列一致をすり抜ける手口への対策)。
@@ -72,7 +82,74 @@ def extract_link_lines(post_text):
     return [line.strip() for line in post_text.splitlines() if line.strip().startswith("http")]
 
 
-def check_post(post_text, source_links, duplicate_links, memo_text=None, link_source_type=None):
+def build_source_text_blob(article):
+    """入力記事1件のテキスト系フィールドを連結し、王制語の入力照合に使う
+    正規化済みテキストを作る(NFKC正規化・不可視文字除去はnormalize_for_
+    checkと同一処理)。id・URL・日付等、語彙照合に意味を持たないフィールド
+    は含めない。
+    """
+    parts = [
+        str(article.get("title", "") or ""),
+        str(article.get("category", "") or ""),
+        str(article.get("summary", "") or ""),
+        str(article.get("status", "") or ""),
+    ]
+    for field in (
+        "confirmedFacts",
+        "remainingProcess",
+        "people",
+        "organizations",
+        "sourceDifferences",
+        "translationCautions",
+    ):
+        value = article.get(field)
+        if isinstance(value, list):
+            parts.extend(str(v) for v in value)
+    return normalize_for_check("\n".join(parts))
+
+
+def check_kingdom_terms(normalized_post, source_text):
+    """ニホンに実在しない王制の創作だけを検出する。
+
+    source_textがNoneの場合(入力照合ができない場合)は検査しない。
+    入力記事に同一の表現が存在する語・複合表現は、引用・否定説明等の
+    可能性があるため許可する(=NGにしない)。「統治する」等、文全体の
+    意味理解が必要な主張はここでは判定しない
+    (banned_terms.pyのモジュールdocstring参照)。
+    """
+    if source_text is None:
+        return []
+
+    reasons = []
+
+    for term in KINGDOM_SMELL_TERMS:
+        if term not in normalized_post:
+            continue
+        if term in source_text:
+            continue
+        reasons.append(f"入力に存在しない語「{term}」がニホンの制度として追加されています")
+
+    reported_compounds = set()
+    for match in NIHON_ROYALTY_ADJACENT_RE.finditer(normalized_post):
+        compound = match.group(0)
+        if compound in reported_compounds:
+            continue
+        if compound in source_text:
+            continue
+        reported_compounds.add(compound)
+        reasons.append(f"入力に存在しない複合表現「{compound}」がニホンの制度として追加されています")
+
+    return reasons
+
+
+def check_post(
+    post_text,
+    source_links,
+    duplicate_links,
+    memo_text=None,
+    link_source_type=None,
+    link_to_source_text=None,
+):
     reasons = []
     normalized_post = normalize_for_check(post_text)
     normalized_lines = [line.strip() for line in normalized_post.splitlines() if line.strip()]
@@ -121,9 +198,16 @@ def check_post(post_text, source_links, duplicate_links, memo_text=None, link_so
     if len(body) > POST_BODY_LIMIT:
         reasons.append(f"{POST_BODY_LIMIT}字超過({len(body)}字、物語本文のみ)")
 
-    for term in FORBIDDEN_TERMS:
-        if term in normalized_post:
-            reasons.append(f"禁止語「{term}」を検出")
+    # 王制語彙検査は、下書きに有効な元記事リンクが厳密に1件だけ存在し、
+    # そのリンクから対応する入力記事を一意に特定できる場合だけ実行する。
+    # 入力テキストblobの内容が偶然同じかどうかでは判定しない(リンク数を
+    # 基準にする)。リンクが0件・2件以上の場合、または唯一のリンクが
+    # 入力記事のいずれとも一致しない場合は実行しない(後者はリンク不一致
+    # 検査で別途NGになる)。
+    source_text = None
+    if link_to_source_text is not None and len(link_lines) == 1:
+        source_text = link_to_source_text.get(link_lines[0])
+    reasons.extend(check_kingdom_terms(normalized_post, source_text))
 
     for term, context_markers in CONTEXTUAL_FORBIDDEN_TERMS.items():
         if term in normalized_post and any(marker in normalized_post for marker in context_markers):
@@ -165,6 +249,7 @@ def main():
     source_links = None
     source_count = None
     link_source_type = None
+    link_to_source_text = None
     file_level_reasons = []
 
     if source_path:
@@ -173,6 +258,11 @@ def main():
             source_count = len(source_articles)
             link_source_type = {
                 a["link"]: a.get("sourceType")
+                for a in source_articles
+                if isinstance(a, dict) and a.get("link")
+            }
+            link_to_source_text = {
+                a["link"]: build_source_text_blob(a)
                 for a in source_articles
                 if isinstance(a, dict) and a.get("link")
             }
@@ -242,6 +332,7 @@ def main():
                 this_draft_links & duplicated_links,
                 memo_text,
                 link_source_type,
+                link_to_source_text,
             )
 
         if reasons:

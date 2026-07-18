@@ -16,13 +16,16 @@ docs/worldbook.md に、過去に存在した矛盾したルール(王国議会�
 4. 【異世界ニホン・◯◯】タグで始まる投稿例ブロックの中に現れる
 
 ただし banned_terms.CONTEXTUAL_FORBIDDEN_TERMS(「クエスト受注」
-「クエスト失敗」「正式実装」「選抜戦」)は、上記1・2(変換先としての
-使用)のみを検査する。これらの語は実際のクエスト(政策実行)の結果や
-スポーツなど、法案・選挙と無関係な文脈で正当に現れうるため(例:
-docs/worldbook.md のいじめ問題の投稿例にある「クエスト失敗の責任を
-一人に押し付ける」)、3・4のパターンでは検査しない。下書き本文への
-出現は、法案・選挙の文脈マーカー語との共起を条件に scripts/validate.py
-が別途検出する。
+「クエスト失敗」「正式実装」「選抜戦」)と banned_terms.
+ROYALTY_ADJACENT_TERMS(「国王」「女王」「王家」「王族」「王子」「王女」
+「王妃」)は、上記1・2(変換先としての使用)のみを検査する。前者は
+実際のクエスト(政策実行)の結果やスポーツなど法案・選挙と無関係な
+文脈で、後者は皇室典範上の正式な身位語・外国の君主号として、いずれも
+下書きの投稿例や箇条書きに正当に現れうるため(2026-07-18改訂: 王制
+語彙は単語単位の無条件禁止から、入力データとの照合方式へ変更した。
+詳細は scripts/banned_terms.py 参照)、3・4のパターンでは検査しない。
+下書き本文への出現は scripts/validate.py が別途、入力データとの照合で
+検出する。
 
 docs/worldbook.md §16は「旧記載→新基準」を対比させる歴史的な記録であり、
 旧記載側に禁止語が矢印付きで登場するのは意図的なため、検査対象から除外する。
@@ -40,7 +43,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from banned_terms import (  # noqa: E402
     CONTEXTUAL_FORBIDDEN_TERMS,
     FORBIDDEN_PARTY_KATAKANA,
-    FORBIDDEN_TERMS,
+    KINGDOM_SMELL_TERMS,
+    ROYALTY_ADJACENT_TERMS,
 )
 
 TARGET_FILES = [
@@ -133,7 +137,7 @@ class RuleConsistencyTest(unittest.TestCase):
     def test_forbidden_terms_not_reintroduced(self):
         for path in TARGET_FILES:
             text = strip_excluded_sections(path, path.read_text(encoding="utf-8"))
-            for term in FORBIDDEN_TERMS:
+            for term in KINGDOM_SMELL_TERMS:
                 matches = find_all_usages(text, term)
                 self.assertEqual(
                     matches,
@@ -152,6 +156,23 @@ class RuleConsistencyTest(unittest.TestCase):
                     [],
                     f"{path.relative_to(ROOT)} に政党名カタカナ変換「{term}」が"
                     f"変換先・許可リスト・投稿例として再混入しています: {matches}",
+                )
+
+    def test_royalty_terms_not_used_as_mapping_target(self):
+        """王制関連語(国王・女王・王家・王族・王子・王女・王妃)は実在語彙
+        として許可されるため、箇条書き・投稿例での使用は検査しない(むしろ
+        正当な使用例として現れうる)。天皇・皇族をこれらの語へ変換する
+        「変換先」としての再混入だけを検査する。
+        """
+        for path in TARGET_FILES:
+            text = strip_excluded_sections(path, path.read_text(encoding="utf-8"))
+            for term in ROYALTY_ADJACENT_TERMS:
+                matches = find_mapping_usages(text, term)
+                self.assertEqual(
+                    matches,
+                    [],
+                    f"{path.relative_to(ROOT)} に「{term}」が天皇・皇族の変換先として"
+                    f"再混入しています: {matches}",
                 )
 
     def test_contextual_terms_not_used_as_mapping(self):
