@@ -47,7 +47,7 @@ def make_source(n, source_type="rss"):
     ]
 
 
-def draft_block(idx, tag, body, link, route="RSS"):
+def draft_block(idx, tag, body, link, route="RSS", explanation="テスト用の解説文。"):
     return (
         f"## 下書き{idx}\n"
         "### 投稿文\n"
@@ -55,7 +55,7 @@ def draft_block(idx, tag, body, link, route="RSS"):
         f"{body}\n"
         "\n"
         "【書記官の解説】\n"
-        "テスト用の解説文。\n"
+        f"{explanation}\n"
         "\n"
         f"{link}\n"
         "#異世界ニホン\n"
@@ -65,15 +65,39 @@ def draft_block(idx, tag, body, link, route="RSS"):
     )
 
 
-def make_draft(n, links=None, bodies=None, tags=None, routes=None):
+def make_draft(n, links=None, bodies=None, tags=None, routes=None, explanations=None):
     links = links or [f"http://example.com/{i}" for i in range(n)]
     bodies = bodies or ["テスト本文。" for _ in range(n)]
     tags = tags or ["【異世界ニホン・国法】" for _ in range(n)]
     routes = routes or ["RSS" for _ in range(n)]
+    explanations = explanations or ["テスト用の解説文。" for _ in range(n)]
     blocks = "\n".join(
-        draft_block(i + 1, tags[i], bodies[i], links[i], routes[i]) for i in range(n)
+        draft_block(i + 1, tags[i], bodies[i], links[i], routes[i], explanations[i])
+        for i in range(n)
     )
     return "# X投稿下書き テスト\n\n" + blocks
+
+
+def make_source_with_facts(link, confirmed_facts=None, source_type="work", **extra_fields):
+    article = {
+        "title": "テスト記事",
+        "link": link,
+        "summary": "",
+        "status": "",
+        "category": "",
+        "pubDate": None,
+        "sourceType": source_type,
+        "people": [],
+        "organizations": [],
+        "confirmedFacts": confirmed_facts or [],
+        "remainingProcess": [],
+        "officialUrls": [],
+        "relatedUrls": [],
+        "sourceDifferences": [],
+        "translationCautions": [],
+    }
+    article.update(extra_fields)
+    return [article]
 
 
 class UnicodeEvasionTest(unittest.TestCase):
@@ -246,6 +270,280 @@ class WorkSourceTypeTest(unittest.TestCase):
         code, content, _, _ = run_validate(draft, make_source(2, source_type="work"))
         self.assertNotEqual(code, 0)
         self.assertIn("他の下書きと重複", content)
+
+
+class KingdomTermsTest(unittest.TestCase):
+    """2026-07-18改訂: 王制関連語(国王・女王・王家・王族・王子・王女・王妃・
+    王都・領主等の「王国」不採用語)は、単語単位では禁止しない。入力記事に
+    実在する語彙としてそのまま使う場合は許可し、入力にない「ニホン+王制語」
+    の固定複合表現だけを禁止する。「統治する」等の文全体の意味理解が
+    必要な主張はscripts/validate.pyでは判定しない
+    (config/runtime_rules.mdと生成後レビューの対象)。
+    """
+
+    def test_official_imperial_terms_present_in_both_input_and_output_pass(self):
+        # 1. 入力と出力の両方に「親王・王・王妃・女王」がある場合は合格
+        link = "http://example.com/0"
+        source = make_source_with_facts(
+            link,
+            confirmed_facts=["親王、親王妃、内親王、王、王妃及び女王は、皇室会議の議を経て、一定の要件を満たす男子を養子とすることができる。"],
+        )
+        explanation = "親王、親王妃、内親王、王、王妃及び女王は、皇室会議の議を経て、一定の要件を満たす男子を養子とすることができる。"
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_official_imperial_terms_variant_a_passes(self):
+        # テスト1A: 内親王及び女王は、婚姻後も原則として皇族の身分を離れない。
+        link = "http://example.com/0"
+        explanation = "内親王及び女王は、婚姻後も原則として皇族の身分を離れない。"
+        source = make_source_with_facts(link, confirmed_facts=[explanation])
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_official_imperial_terms_variant_b_passes(self):
+        # テスト1B: 親王、親王妃、内親王、王、王妃及び女王は、皇室会議の議を
+        # 経て、一定の要件を満たす男子を養子とすることができる。
+        link = "http://example.com/0"
+        explanation = "親王、親王妃、内親王、王、王妃及び女王は、皇室会議の議を経て、一定の要件を満たす男子を養子とすることができる。"
+        source = make_source_with_facts(link, confirmed_facts=[explanation])
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_foreign_monarchy_terms_present_in_both_input_and_output_pass(self):
+        # 2. 入力と出力の両方に外国の「国王・女王・王室・王子・王女」がある
+        # 場合は合格
+        link = "http://example.com/0"
+        explanation = "英国のチャールズ国王とエリザベス前女王、ウィリアム王子について、王室行事の一環として報じられた。"
+        source = make_source_with_facts(link, confirmed_facts=[explanation])
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_official_terms_remaining_in_explanation_still_pass(self):
+        # 7. 入力に正式用語がある場合、書記官の解説に残っていてもvalidate.py
+        # が合格させる(解説限定での再確認)
+        link = "http://example.com/0"
+        explanation = "王、王妃及び女王は皇族の身分を保つ。"
+        source = make_source_with_facts(link, confirmed_facts=["王、王妃及び女王は皇族の身分を保つ。"])
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_smell_terms_fabricated_without_input_are_rejected(self):
+        # 3. 入力にない「ニホン王国」「王国政府」「王国議会」「王都」は失敗する
+        link = "http://example.com/0"
+        source = make_source_with_facts(link, confirmed_facts=["普通の政治ニュース記事です。"])
+        for term in ["ニホン王国", "王国政府", "王国議会", "王都"]:
+            with self.subTest(term=term):
+                explanation = f"{term}についての説明。"
+                draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+                code, content, _, _ = run_validate(draft, source)
+                self.assertNotEqual(code, 0, content)
+                self.assertIn("⚠NG", content)
+                # Minor2対応: NGの理由が王制語彙検査によるものであることを
+                # 具体的に確認する(別の理由で偶然NGになったのではないか)。
+                self.assertIn(f"入力に存在しない語「{term}」がニホンの制度として追加されています", content)
+
+    def test_nihon_adjacent_royalty_compounds_fabricated_without_input_are_rejected(self):
+        # 3/8. 入力にない「ニホンの女王」「ニホンの王家」等を出力側が追加
+        # した場合はNG
+        link = "http://example.com/0"
+        source = make_source_with_facts(link, confirmed_facts=["普通の政治ニュース記事です。"])
+        for compound in ["ニホンの女王", "ニホン国王", "ニホンの王家", "ニホン王家", "ニホン王室", "ニホンの王室"]:
+            with self.subTest(compound=compound):
+                explanation = f"{compound}についての説明。"
+                draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+                code, content, _, _ = run_validate(draft, source)
+                self.assertNotEqual(code, 0, content)
+                self.assertIn("⚠NG", content)
+                # Minor2対応: NGの理由が王制語彙検査によるものであることを
+                # 具体的に確認する。
+                self.assertIn(f"入力に存在しない複合表現「{compound}」がニホンの制度として追加されています", content)
+
+    def test_bare_ou_character_in_unrelated_words_not_falsely_detected(self):
+        # 5. 「王貞治」「王座」「王将」「王氏」を裸の「王」として誤検出しない
+        link = "http://example.com/0"
+        source = make_source_with_facts(link, confirmed_facts=["普通の政治ニュース記事です。"])
+        for word in ["王貞治", "王座", "王将", "王氏"]:
+            with self.subTest(word=word):
+                explanation = f"{word}について解説では触れられた。"
+                draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+                code, content, _, _ = run_validate(draft, source)
+                self.assertEqual(code, 0, content)
+
+    def test_foreign_and_historical_smell_terms_in_input_are_not_uniformly_rejected(self):
+        # 6. 入力にある「王都・領主」等の外国・歴史用語を一律に弾かない
+        link = "http://example.com/0"
+        explanation = "中世の記録によれば、その地は王都と呼ばれ、領主が治めていたとされる。"
+        source = make_source_with_facts(link, confirmed_facts=[explanation])
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_semantic_governance_claims_are_not_mechanically_rejected(self):
+        # 4. 「女王がニホンを統治する」等、文全体の意味理解が必要な主張は
+        # validate.pyでは無理にNGにしない(runtime_rules.mdと生成後レビュー
+        # の対象とする、という設計上の意図的な境界を確認する)。
+        link = "http://example.com/0"
+        source = make_source_with_facts(link, confirmed_facts=["普通の政治ニュース記事です。"])
+        sentences = [
+            "女王がニホンを統治している。",
+            "ニホンは女王が統治する国ではない。",
+            "女王がニホンを統治している事実はない。",
+            "ニホンに国王や女王が統治する制度は存在しない。",
+            "英国国王が来日し、ニホンの統治制度について説明を受けた。",
+        ]
+        for explanation in sentences:
+            with self.subTest(explanation=explanation):
+                draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+                code, content, _, _ = run_validate(draft, source)
+                self.assertEqual(
+                    code, 0, f"意味理解が必要な文はvalidate.pyでNGにしない設計のはず: {content}"
+                )
+
+    def test_unrelated_negation_in_another_sentence_does_not_auto_pass_whole_post(self):
+        # 9. 否定語が文中にあるだけで、文全体を自動的に合格させる実装に
+        # なっていない: 「ニホンの女王」という固定複合表現(NG対象)を含む
+        # 文の直後に、無関係な否定文を続けても、複合表現自体の違反判定は
+        # 打ち消されない(=別文の否定語が全体を合格させることはない)。
+        link = "http://example.com/0"
+        source = make_source_with_facts(link, confirmed_facts=["普通の政治ニュース記事です。"])
+        explanation = "ニホンの女王について記された。これは誤りではないかもしれない。"
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertNotEqual(code, 0, content)
+        self.assertIn("⚠NG", content)
+        # Minor2対応: 理由が王制語彙検査によるものであることを確認する。
+        self.assertIn("入力に存在しない複合表現「ニホンの女王」がニホンの制度として追加されています", content)
+
+    def test_foreign_royal_family_term_present_in_input_passes(self):
+        # 王室追加の確認: 入力に外国の「王室」がある場合は合格する。
+        link = "http://example.com/0"
+        explanation = "英国王室は、王子の来日を歓迎する声明を発表した。"
+        source = make_source_with_facts(link, confirmed_facts=[explanation])
+        draft = make_draft(1, links=[link], routes=["Work"], explanations=[explanation])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_narrative_within_130_chars_still_passes(self):
+        # 5. 物語本文130字制限の既存検査が引き続き合格することを確認する。
+        link = "http://example.com/0"
+        source = make_source_with_facts(link, confirmed_facts=["普通の政治ニュース記事です。"])
+        body = "テスト本文。" * 5  # 110字未満(130字制限内)
+        draft = make_draft(1, links=[link], bodies=[body], routes=["Work"])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertEqual(code, 0, content)
+
+    def test_narrative_over_130_chars_still_rejected(self):
+        # 5. 物語本文130字制限の既存検査が引き続き機能することを確認する
+        # (王制語検査の変更で他の検査が壊れていないかの回帰確認)。
+        link = "http://example.com/0"
+        source = make_source_with_facts(link, confirmed_facts=["普通の政治ニュース記事です。"])
+        body = "テスト本文。" * 23  # 138字(130字超過)
+        draft = make_draft(1, links=[link], bodies=[body], routes=["Work"])
+        code, content, _, _ = run_validate(draft, source)
+        self.assertNotEqual(code, 0, content)
+        self.assertIn("字超過", content)
+
+
+class KingdomTermLinkMatchingTest(unittest.TestCase):
+    """Codexレビュー指摘(Minor1)対応: 王制語彙検査は、下書きに有効な
+    元記事リンクが厳密に1件だけあり、そのリンクから入力記事を一意に
+    特定できる場合だけ実行する。入力テキストblobが偶然一致するか否かで
+    判定しないことを確認する。
+    """
+
+    def test_two_draft_blocks_with_distinct_links_use_correct_source_each(self):
+        # 同一内容の入力記事が2件存在しても、リンク数(各下書きブロックとも
+        # 1件)を基準に、正しくそれぞれ対応する入力記事と照合される。
+        link1 = "http://example.com/0"
+        link2 = "http://example.com/1"
+        facts = ["普通の政治ニュース記事です。"]  # 2記事とも同一内容
+        source = [
+            {
+                "title": "t0", "link": link1, "summary": "", "status": "", "category": "",
+                "pubDate": None, "sourceType": "work", "people": [], "organizations": [],
+                "confirmedFacts": facts, "remainingProcess": [], "officialUrls": [],
+                "relatedUrls": [], "sourceDifferences": [], "translationCautions": [],
+            },
+            {
+                "title": "t1", "link": link2, "summary": "", "status": "", "category": "",
+                "pubDate": None, "sourceType": "work", "people": [], "organizations": [],
+                "confirmedFacts": facts, "remainingProcess": [], "officialUrls": [],
+                "relatedUrls": [], "sourceDifferences": [], "translationCautions": [],
+            },
+        ]
+        draft = make_draft(
+            2,
+            links=[link1, link2],
+            routes=["Work", "Work"],
+            explanations=["ニホンの女王について記された。", "普通の解説文。"],
+        )
+        code, content, _, _ = run_validate(draft, source)
+        self.assertNotEqual(code, 0, content)
+        self.assertIn("入力に存在しない複合表現「ニホンの女王」", content)
+        # 2件目(下書き2)は正しい入力と照合されており、誤検出されていない。
+        self.assertNotIn("下書き2 ⚠NG", content)
+
+    def test_two_links_in_a_single_draft_block_skip_kingdom_check(self):
+        # 1つの下書きブロックに元記事リンクが2件含まれる場合、王制語彙検査
+        # は実行されない(=このテストでは王制語彙検査由来のNG理由が
+        # つかないことだけを確認する)。
+        link1 = "http://example.com/0"
+        link2 = "http://example.com/1"
+        source = [
+            {
+                "title": "t0", "link": link1, "summary": "", "status": "", "category": "",
+                "pubDate": None, "sourceType": "work", "people": [], "organizations": [],
+                "confirmedFacts": [], "remainingProcess": [], "officialUrls": [],
+                "relatedUrls": [], "sourceDifferences": [], "translationCautions": [],
+            },
+            {
+                "title": "t1", "link": link2, "summary": "", "status": "", "category": "",
+                "pubDate": None, "sourceType": "work", "people": [], "organizations": [],
+                "confirmedFacts": [], "remainingProcess": [], "officialUrls": [],
+                "relatedUrls": [], "sourceDifferences": [], "translationCautions": [],
+            },
+        ]
+        body = f"テスト本文。\n{link2}"
+        draft = make_draft(
+            1, links=[link1], bodies=[body], routes=["Work"],
+            explanations=["ニホンの女王について記された。"],
+        )
+        code, content, _, _ = run_validate(draft, source)
+        # リンクが2件になるため王制語彙検査は実行されない。
+        self.assertNotIn("入力に存在しない複合表現", content)
+        self.assertNotIn("がニホンの制度として追加されています", content)
+
+    def test_link_not_matching_any_source_article_is_handled_by_existing_link_check(self):
+        # 下書きのリンクに対応する入力記事がない場合、王制語彙検査は実行
+        # されず(source_text=None)、既存のリンク不一致検査でNGになる。
+        link = "http://example.com/not-in-source"
+        source = make_source_with_facts("http://example.com/0", confirmed_facts=["普通の記事。"])
+        draft = make_draft(
+            1, links=[link], routes=["Work"], explanations=["ニホンの女王について記された。"]
+        )
+        code, content, _, _ = run_validate(draft, source)
+        self.assertNotEqual(code, 0, content)
+        self.assertIn("入力JSONのlinkと一致しない", content)
+        # 王制語彙検査由来の理由は付かない(source_text=Noneで検査自体が
+        # スキップされるため)。
+        self.assertNotIn("入力に存在しない複合表現", content)
+
+
+class TranslatePromptContentTest(unittest.TestCase):
+    """prompts/translate.mdに、法律上の範囲を広げたり狭めたりしないという
+    事実保持ルールが存在することを確認する(2026-07-18追加)。
+    """
+
+    def test_translate_md_has_scope_preservation_rule(self):
+        translate_md = ROOT / "prompts" / "translate.md"
+        text = translate_md.read_text(encoding="utf-8")
+        self.assertIn("法律・制度の内容を短縮する際の注意", text)
+        self.assertIn("広くまたは狭く読める表現へ一般化しては", text)
 
 
 if __name__ == "__main__":
