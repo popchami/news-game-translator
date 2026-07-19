@@ -22,9 +22,18 @@ MAX_CHARACTERS_PER_EPISODE = 3
 # X用4コマ版は4コマ固定(docs/worldbook.mdの「X用4コマ版」節参照)。
 PANEL_COUNT = 4
 
-# ハルト表情セットのファイル名体系(00-neutral〜30-speaking-forceful、
-# 計31種)に対応させる。neutralのみ強度指定なしの単独タグとし、他の10種は
-# 強度(weak/medium/strong)付きの複合タグとする(1 + 10×3 = 31)。
+# ハルト表情セットは「00-neutral」〜「30-speaking-forceful」の計31種で
+# 構成されているとされるが、実ファイル名(強度部分の語)は本リポジトリ外の
+# アセットであり本Packetスキーマ設計時点では確認できていない
+# (docs/manga-pipeline.mdの「前提条件・未解決事項」参照)。この不確実性を
+# 踏まえ、本スキーマではPacket内部の語彙として neutral(強度指定なし)+
+# 10種の基本タグ×強度(weak/medium/strong)の計31種を独自に定義する
+# (1 + 10×3 = 31。件数は一致させたが、強度側の語("strong"等)が実際の
+# ファイル名の語("forceful"等)と一致するとは限らない)。実ファイル名との
+# 対応付けはPhase 2以降、実アセットを確認したうえで別途行う。
+# reference_imageフィールドは自由文字列であり、expressionタグから機械的に
+# 導出されるものではない(このモジュールはreference_imageとexpressionの
+# 対応関係を検証しない)。
 EXPRESSION_BASE_TAGS_NO_INTENSITY = ["neutral"]
 EXPRESSION_BASE_TAGS_WITH_INTENSITY = [
     "joy",
