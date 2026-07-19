@@ -10,8 +10,8 @@ news-game-translatorのニュース変換パイプラインとは別に、スマ
   チャミ+ChatGPTが運用する検討過程の原本を土台に整理したもの)
 - 第1話脚本: 未着手(縦読み版。scripts/episode01.md参照)
 - 画像生成:
-  - **4コマ版(X投稿用)**: docs/manga-pipeline.mdのパイプラインで
-    comfyui-mobile-systemとの自動連携を実装中(Phase 1着手)
+  - **5コマ構成(起承転結4コマ+解説コマ、X投稿用)**: docs/manga-pipeline.md
+    のパイプラインでcomfyui-mobile-systemとの自動連携を実装中(Phase 1着手)
   - **縦読み版**: 従来どおり手動。comfyui-mobile-system(別リポジトリ)を
     手動で使う想定
 
@@ -19,6 +19,6 @@ news-game-translatorのニュース変換パイプラインとは別に、スマ
 
 - 縦読み版は、1話全体を一括生成しない。キャラクター設定画→背景設定画→脚本→
   各カット個別生成、の順で手作業を挟みながら進める(worldbookの制作方針に準拠)
-- 4コマ版は、docs/manga-pipeline.mdの半自動パイプラインに従う
+- 5コマ構成は、docs/manga-pipeline.mdの半自動パイプラインに従う
   (ニュース確認→RunPod起動→マンガ生成→完成確認→X投稿→RunPod停止、が
   人が行う作業のすべてとなることを目指す)
