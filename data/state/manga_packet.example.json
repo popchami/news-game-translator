@@ -1,0 +1,55 @@
+{
+  "packet_version": 1,
+  "created_at": "2026-07-19T09:00:00+09:00",
+  "source": {
+    "title": "「副首都」構想法案 衆議院を通過、会期末の成立は不透明",
+    "url": "http://www3.nhk.or.jp/news/html/20260715/k10015177671000.html",
+    "summary": "大規模災害時の首都代替機能を担う「副首都」構想の関連法案が衆議院本会議で可決され、参議院に送られた。会期末は17日で、これに間に合うかは不透明。与党は会期末の成立を目指す一方、会期延長も検討している。"
+  },
+  "isekai_text": "中央評議会で、災厄に備え第二の都を築く「副首都」の国法がシュウギ院を通過した。残る審査はサンギ院のみ。会期末までに越えられるかは、まだ誰にも分からない。",
+  "scribe_note": "大規模災害時に首都機能を代替する「副首都」構想の関連法案は、2026年7月15日に衆議院本会議で可決され参議院へ送られた。会期末は同月17日で、これに間に合うかは不透明である。与党は会期末までの成立を目指す一方、会期延長も検討されている。",
+  "characters": ["ハルト", "アキラ", "書記官"],
+  "panels": [
+    {
+      "panel_no": 1,
+      "scene": "中央公示ギルドの掲示板前で、ハルトが新しい掲示に気づき指差す",
+      "dialogue": "ハルト「おい見ろよ、これ!『第二の都』計画、シュウギ院を通過したってさ」",
+      "expression": "surprise-medium",
+      "background": "掲示板前の広場、賑わう街並み",
+      "image_prompt": "young male adventurer Haruto pointing excitedly at a guild bulletin board, medieval fantasy guild plaza background, surprised joyful expression, anime style",
+      "reference_image": "haruto/surprise-medium.png"
+    },
+    {
+      "panel_no": 2,
+      "scene": "ハルトが掲示のアップを見て驚いた顔でアキラを見る",
+      "dialogue": "ハルト「え、そんなことのために新しい都を作るのか?」",
+      "expression": "confusion-medium",
+      "background": "掲示板の文字が見える近景",
+      "image_prompt": "Haruto looking confused and curious at a bulletin notice, close-up guild board background, anime style",
+      "reference_image": "haruto/confusion-medium.png"
+    },
+    {
+      "panel_no": 3,
+      "scene": "アキラが腕組みし、掲示の隅の日付を指しながら補足する",
+      "dialogue": "アキラ「災害用の予備、ってことだろ。シュウギ院は通した。だが会期末はもう目の前だ。サンギ院が間に合うかは、まだ誰にも分からない」",
+      "expression": "neutral",
+      "background": "掲示板前、少し離れた位置",
+      "image_prompt": "young male adventurer Akira with arms crossed, calm serious expression, pointing at a date on a notice board, anime style",
+      "reference_image": "akira/neutral.png"
+    },
+    {
+      "panel_no": 4,
+      "scene": "書記官が掲示板の奥で静かに佇み、記録を読み上げる",
+      "dialogue": "書記官「——この件について、記録を残す」",
+      "expression": "speaking-weak",
+      "background": "掲示板の奥、静かな執務スペース",
+      "image_prompt": "female scribe character standing calmly in a quiet guild archive corner, holding a scroll, composed expression, anime style",
+      "reference_image": "scribe/speaking-weak.png"
+    }
+  ],
+  "cautions": [
+    "元記事2件のうち、副首都に関する会期末言及部分のみ使用した(皇室典範改正案に関する部分は今回不使用)",
+    "会期末までに成立するかどうかは断定せず、未確定表現を維持した",
+    "reference_imageはアキラ・書記官分を含め未作成(docs/manga-pipeline.mdの前提条件・未解決事項参照)。ファイル名は暫定"
+  ]
+}
