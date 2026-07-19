@@ -9,6 +9,7 @@ RunPod側はこのPacketを画像化するだけとする設計(docs/manga-pipel
 scripts/validate_manga.pyはこのモジュールの構造検証に加え、
 scripts/banned_terms.pyの禁止語検証を行う。
 """
+import re
 
 PACKET_VERSION = 1
 
@@ -22,20 +23,15 @@ MAX_CHARACTERS_PER_EPISODE = 3
 # X用4コマ版は4コマ固定(docs/worldbook.mdの「X用4コマ版」節参照)。
 PANEL_COUNT = 4
 
-# ハルト表情セットは「00-neutral」〜「30-speaking-forceful」の計31種で
-# 構成されているとされるが、実ファイル名(強度部分の語)は本リポジトリ外の
-# アセットであり本Packetスキーマ設計時点では確認できていない
-# (docs/manga-pipeline.mdの「前提条件・未解決事項」参照)。この不確実性を
-# 踏まえ、本スキーマではPacket内部の語彙として neutral(強度指定なし)+
-# 10種の基本タグ×強度(weak/medium/strong)の計31種を独自に定義する
-# (1 + 10×3 = 31。件数は一致させたが、強度側の語("strong"等)が実際の
-# ファイル名の語("forceful"等)と一致するとは限らない)。実ファイル名との
-# 対応付けはPhase 2以降、実アセットを確認したうえで別途行う。
-# reference_imageフィールドは自由文字列であり、expressionタグから機械的に
-# 導出されるものではない(このモジュールはreference_imageとexpressionの
-# 対応関係を検証しない)。
+# ハルト表情セットの実ファイル名体系(チャミによる実物検証済み、確定):
+#   00: neutral(強度指定なし)
+#   01〜27: 9感情(joy/surprise/confusion/worry/anger/sadness/
+#           embarrassment/determination/tears) × weak/medium/strong
+#   28〜30: speakingのみ専用の強度語(small/normal/forceful)。
+#           speakingにweak/medium/strongは使わない
+# 合計 1 + 9×3 + 3 = 31種。expressionタグはこの体系に一致させる。
 EXPRESSION_BASE_TAGS_NO_INTENSITY = ["neutral"]
-EXPRESSION_BASE_TAGS_WITH_INTENSITY = [
+EXPRESSION_STANDARD_INTENSITY_BASE_TAGS = [
     "joy",
     "surprise",
     "confusion",
@@ -45,20 +41,36 @@ EXPRESSION_BASE_TAGS_WITH_INTENSITY = [
     "embarrassment",
     "determination",
     "tears",
-    "speaking",
 ]
-EXPRESSION_INTENSITIES = ["weak", "medium", "strong"]
+EXPRESSION_STANDARD_INTENSITIES = ["weak", "medium", "strong"]
+
+# speakingのみ、上記と異なる専用の強度語を使う(01〜27の9感情とは別体系)。
+EXPRESSION_SPEAKING_BASE_TAG = "speaking"
+EXPRESSION_SPEAKING_INTENSITIES = ["small", "normal", "forceful"]
 
 
 def _build_allowed_expression_tags():
     tags = set(EXPRESSION_BASE_TAGS_NO_INTENSITY)
-    for base in EXPRESSION_BASE_TAGS_WITH_INTENSITY:
-        for intensity in EXPRESSION_INTENSITIES:
+    for base in EXPRESSION_STANDARD_INTENSITY_BASE_TAGS:
+        for intensity in EXPRESSION_STANDARD_INTENSITIES:
             tags.add(f"{base}-{intensity}")
+    for intensity in EXPRESSION_SPEAKING_INTENSITIES:
+        tags.add(f"{EXPRESSION_SPEAKING_BASE_TAG}-{intensity}")
     return tags
 
 
 ALLOWED_EXPRESSION_TAGS = _build_allowed_expression_tags()
+
+# created_atはISO 8601形式の日時文字列を要求する(prompts/manga_script.md
+# 参照)。厳密なISO 8601全体の網羅ではなく、この用途で実際に出力される
+# 形式(YYYY-MM-DDTHH:MM:SS + 任意の小数秒 + Zまたは±HH:MM)を検査する。
+ISO8601_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$"
+)
+
+
+def is_valid_iso8601(value):
+    return isinstance(value, str) and bool(ISO8601_RE.match(value))
 
 REQUIRED_SOURCE_STR_FIELDS = ["title", "url", "summary"]
 REQUIRED_PANEL_STR_FIELDS = [
@@ -120,9 +132,13 @@ def validate_panel(panel, index):
         return [f"panels[{index}]がオブジェクトではありません"]
 
     reasons = []
-    if panel.get("panel_no") != index + 1:
+    panel_no = panel.get("panel_no")
+    # bool は int のサブクラスであり True == 1 が成立するため、明示的に
+    # bool を除外しないと panel_no: true が 1 として通ってしまう
+    # (Codexレビュー指摘)。
+    if isinstance(panel_no, bool) or panel_no != index + 1:
         reasons.append(
-            f"panels[{index}].panel_noが{index + 1}である必要があります: {panel.get('panel_no')!r}"
+            f"panels[{index}].panel_noが{index + 1}である必要があります: {panel_no!r}"
         )
 
     for field in REQUIRED_PANEL_STR_FIELDS:
@@ -149,8 +165,10 @@ def validate_packet(packet):
             f"packet_versionが不正です({PACKET_VERSION}である必要): {packet.get('packet_version')!r}"
         )
 
-    if not isinstance(packet.get("created_at"), str) or not packet.get("created_at"):
-        reasons.append("created_atが不正です(空でない文字列である必要)")
+    if not is_valid_iso8601(packet.get("created_at")):
+        reasons.append(
+            f"created_atが不正です(ISO 8601形式の日時文字列である必要): {packet.get('created_at')!r}"
+        )
 
     reasons.extend(validate_source(packet.get("source")))
 

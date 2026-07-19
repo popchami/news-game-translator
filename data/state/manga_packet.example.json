@@ -41,10 +41,10 @@
       "panel_no": 4,
       "scene": "書記官が掲示板の奥で静かに佇み、記録を読み上げる",
       "dialogue": "書記官「——この件について、記録を残す」",
-      "expression": "speaking-weak",
+      "expression": "speaking-normal",
       "background": "掲示板の奥、静かな執務スペース",
       "image_prompt": "female scribe character standing calmly in a quiet guild archive corner, holding a scroll, composed expression, anime style",
-      "reference_image": "scribe/speaking-weak.png"
+      "reference_image": "scribe/speaking-normal.png"
     }
   ],
   "cautions": [

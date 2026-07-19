@@ -36,7 +36,7 @@ def make_panels():
         make_panel(1, expression="neutral"),
         make_panel(2, expression="surprise-medium"),
         make_panel(3, expression="determination-strong"),
-        make_panel(4, expression="speaking-weak"),
+        make_panel(4, expression="speaking-normal"),
     ]
 
 
@@ -76,6 +76,18 @@ class ValidatePacketStructureTest(unittest.TestCase):
         del packet["created_at"]
         reasons = ms.validate_packet(packet)
         self.assertTrue(any("created_at" in r for r in reasons))
+
+    def test_non_iso8601_created_at_rejected(self):
+        for bad_value in ["later", "2026-07-19", "2026/07/19 09:00:00", ""]:
+            with self.subTest(bad_value=bad_value):
+                reasons = ms.validate_packet(make_packet(created_at=bad_value))
+                self.assertTrue(any("created_at" in r for r in reasons))
+
+    def test_iso8601_created_at_with_offset_and_z_accepted(self):
+        for good_value in ["2026-07-19T09:00:00+09:00", "2026-07-19T00:00:00Z", "2026-07-19T09:00:00.123+09:00"]:
+            with self.subTest(good_value=good_value):
+                reasons = ms.validate_packet(make_packet(created_at=good_value))
+                self.assertFalse(any("created_at" in r for r in reasons))
 
     def test_empty_isekai_text_rejected(self):
         reasons = ms.validate_packet(make_packet(isekai_text=""))
@@ -164,6 +176,15 @@ class ValidatePanelTest(unittest.TestCase):
         reasons = ms.validate_panel(make_panel(panel_no=2), 0)
         self.assertTrue(any("panel_no" in r for r in reasons))
 
+    def test_bool_panel_no_rejected_even_though_equal_to_int(self):
+        # bool は int のサブクラスであり True == 1 が成立するため、
+        # panel_no: true を1として誤って通してしまわないことを確認する
+        # (Codexレビュー指摘)。
+        panel = make_panel(1)
+        panel["panel_no"] = True
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("panel_no" in r for r in reasons))
+
     def test_missing_required_field_rejected(self):
         for field in ms.REQUIRED_PANEL_STR_FIELDS:
             with self.subTest(field=field):
@@ -186,9 +207,9 @@ class ValidatePanelTest(unittest.TestCase):
         panel = make_panel(1, expression="neutral")
         self.assertEqual(ms.validate_panel(panel, 0), [])
 
-    def test_all_base_tags_with_all_intensities_accepted(self):
-        for base in ms.EXPRESSION_BASE_TAGS_WITH_INTENSITY:
-            for intensity in ms.EXPRESSION_INTENSITIES:
+    def test_all_standard_base_tags_with_all_standard_intensities_accepted(self):
+        for base in ms.EXPRESSION_STANDARD_INTENSITY_BASE_TAGS:
+            for intensity in ms.EXPRESSION_STANDARD_INTENSITIES:
                 tag = f"{base}-{intensity}"
                 with self.subTest(tag=tag):
                     panel = make_panel(1, expression=tag)
@@ -198,6 +219,46 @@ class ValidatePanelTest(unittest.TestCase):
         panel = make_panel(1, expression="neutral-medium")
         reasons = ms.validate_panel(panel, 0)
         self.assertTrue(any("expression" in r for r in reasons))
+
+    def test_exact_tag_set_matches_confirmed_asset_scheme(self):
+        # ハルト表情セットの実ファイル名体系(チャミによる実物検証済み):
+        # 00: neutral / 01〜27: 9感情×weak/medium/strong /
+        # 28〜30: speaking-small/normal/forceful。合計31種であることと、
+        # 実装がこの厳密な集合と一致することを固定的に確認する
+        # (実装内部の定数から機械的に生成しない、Codexレビュー指摘対応)。
+        expected = {"neutral"}
+        for base in [
+            "joy", "surprise", "confusion", "worry", "anger",
+            "sadness", "embarrassment", "determination", "tears",
+        ]:
+            for intensity in ["weak", "medium", "strong"]:
+                expected.add(f"{base}-{intensity}")
+        for intensity in ["small", "normal", "forceful"]:
+            expected.add(f"speaking-{intensity}")
+
+        self.assertEqual(len(expected), 31)
+        self.assertEqual(ms.ALLOWED_EXPRESSION_TAGS, expected)
+
+    def test_speaking_does_not_accept_standard_intensities(self):
+        for intensity in ["weak", "medium", "strong"]:
+            with self.subTest(intensity=intensity):
+                panel = make_panel(1, expression=f"speaking-{intensity}")
+                reasons = ms.validate_panel(panel, 0)
+                self.assertTrue(any("expression" in r for r in reasons))
+
+    def test_other_emotions_do_not_accept_speaking_intensities(self):
+        for intensity in ["small", "normal", "forceful"]:
+            with self.subTest(intensity=intensity):
+                panel = make_panel(1, expression=f"joy-{intensity}")
+                reasons = ms.validate_panel(panel, 0)
+                self.assertTrue(any("expression" in r for r in reasons))
+
+    def test_all_speaking_intensities_accepted(self):
+        for intensity in ms.EXPRESSION_SPEAKING_INTENSITIES:
+            tag = f"speaking-{intensity}"
+            with self.subTest(tag=tag):
+                panel = make_panel(1, expression=tag)
+                self.assertEqual(ms.validate_panel(panel, 0), [])
 
 
 class PanelCountTest(unittest.TestCase):
@@ -237,6 +298,22 @@ class ExampleFileTest(unittest.TestCase):
         before = copy.deepcopy(packet)
         ms.validate_packet(packet)
         self.assertEqual(packet, before)
+
+
+class IsValidIso8601Test(unittest.TestCase):
+    def test_valid_formats_accepted(self):
+        for value in [
+            "2026-07-19T09:00:00+09:00",
+            "2026-07-19T00:00:00Z",
+            "2026-07-19T09:00:00.5+09:00",
+        ]:
+            with self.subTest(value=value):
+                self.assertTrue(ms.is_valid_iso8601(value))
+
+    def test_invalid_formats_rejected(self):
+        for value in ["2026-07-19", "later", "", None, 123, "2026-07-19 09:00:00+09:00"]:
+            with self.subTest(value=value):
+                self.assertFalse(ms.is_valid_iso8601(value))
 
 
 if __name__ == "__main__":

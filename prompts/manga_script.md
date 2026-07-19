@@ -112,13 +112,16 @@ sourceDifferences(情報源間の食い違い)がある場合は、cautionsフ�
 - `cautions`: 事実保持の注意事項(独自訳・sourceDifferences・断定を
   避けた表現等)の配列。特になければ空配列
 
-表情タグ(`expression`)は次のいずれかを使う:
+表情タグ(`expression`)は、ハルト表情セットの実ファイル名体系
+(チャミによる実物検証済み、確定)に合わせ、次のいずれかを使う:
 
 - `neutral`(強度指定なし)
-- 以下10種 × 強度(`weak`/`medium`/`strong`)の組み合わせ
-  (例: `joy-medium`、`speaking-weak`):
+- 以下9種 × 強度(`weak`/`medium`/`strong`)の組み合わせ
+  (例: `joy-medium`):
   `joy`・`surprise`・`confusion`・`worry`・`anger`・`sadness`・
-  `embarrassment`・`determination`・`tears`・`speaking`
+  `embarrassment`・`determination`・`tears`
+- `speaking`は上記9種とは異なる専用の強度語を使う(`speaking-weak`等は
+  使わない): `speaking-small`・`speaking-normal`・`speaking-forceful`
 
 `reference_image`は、対応キャラクターの表情タグに沿ったファイル名を
 記載する(実際のファイルがまだ存在しない場合でも、意図する名称を

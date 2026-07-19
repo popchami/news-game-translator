@@ -205,12 +205,28 @@ class KingdomTermTest(unittest.TestCase):
 class BuildTextBlobTest(unittest.TestCase):
     def test_packet_text_blob_includes_all_panel_fields(self):
         panels = make_panels()
-        panels[0] = make_panel(1, scene="固有シーン語", dialogue="固有セリフ語", background="固有背景語")
+        panels[0] = make_panel(
+            1,
+            scene="固有シーン語",
+            dialogue="固有セリフ語",
+            background="固有背景語",
+            image_prompt="unique image prompt marker",
+        )
         packet = make_packet(panels=panels)
         blob = vm.build_packet_text_blob(packet)
         self.assertIn("固有シーン語", blob)
         self.assertIn("固有セリフ語", blob)
         self.assertIn("固有背景語", blob)
+        self.assertIn("unique image prompt marker", blob)
+
+    def test_banned_japanese_term_leaked_into_image_prompt_is_detected(self):
+        # image_promptは本来英語だが、日本語の禁止語が混入した場合を
+        # 検査で捕捉できることを確認する(Codexレビュー指摘)。
+        panels = make_panels()
+        panels[0] = make_panel(1, image_prompt="anime scene, ジミン党 representative at a podium")
+        packet = make_packet(panels=panels)
+        reasons = vm.validate_manga_packet(packet)
+        self.assertTrue(any("ジミン党" in r for r in reasons))
 
     def test_source_text_blob_includes_title_and_summary(self):
         source = {"title": "固有タイトル語", "url": "https://example.com/x", "summary": "固有要約語"}

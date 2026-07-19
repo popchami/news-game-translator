@@ -26,8 +26,10 @@ from banned_terms import CONTEXTUAL_FORBIDDEN_TERMS, FORBIDDEN_PARTY_KATAKANA
 
 
 def build_packet_text_blob(packet):
-    """Packet内の日本語テキストフィールドを連結し、禁止語検査用の
-    正規化済みテキストを作る。
+    """Packet内のテキストフィールドを連結し、禁止語検査用の正規化済み
+    テキストを作る。image_promptは本来英語だが、モデルが日本語(禁止語・
+    政党名カタカナ化等)を混入させる可能性を検査で捕捉できるよう、検査
+    対象に含める(Codexレビュー指摘)。
     """
     parts = [
         str(packet.get("isekai_text", "") or ""),
@@ -38,7 +40,7 @@ def build_packet_text_blob(packet):
         for panel in panels:
             if not isinstance(panel, dict):
                 continue
-            for field in ("scene", "dialogue", "background"):
+            for field in ("scene", "dialogue", "background", "image_prompt"):
                 parts.append(str(panel.get(field, "") or ""))
     return validate.normalize_for_check("\n".join(parts))
 
