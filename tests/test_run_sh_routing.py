@@ -187,14 +187,23 @@ class RunShRoutingTest(unittest.TestCase):
             "--remove-label",
             "--repo",  # commit-pendingにはrepoを渡さない(closeを行わないため不要)
         ]
-        text_without_fetch_call = re.sub(
+        # 通常モードのfetchと緊急モードのfetch-singleは、いずれも読み取り
+        # 専用のgh呼び出し(--repoを含む)を正当に持つため、両方を除外して
+        # からforbiddenスニペットの想定外混入を検査する。
+        text_without_fetch_calls = re.sub(
             r"python3 scripts/import_work_news\.py fetch.*?--pending-out \"\$\{WORK_PENDING\}\"",
             "",
             self.text,
             flags=re.S,
         )
+        text_without_fetch_calls = re.sub(
+            r"python3 scripts/import_work_news\.py fetch-single.*?--pending-out \"\$\{URGENT_PENDING\}\"",
+            "",
+            text_without_fetch_calls,
+            flags=re.S,
+        )
         for snippet in forbidden:
-            self.assertNotIn(snippet, text_without_fetch_call, f"'{snippet}' が想定外の箇所に存在します")
+            self.assertNotIn(snippet, text_without_fetch_calls, f"'{snippet}' が想定外の箇所に存在します")
 
     def test_close_retry_ledger_references_removed(self):
         self.assertNotIn("CLOSE_RETRY", self.text)
@@ -203,6 +212,139 @@ class RunShRoutingTest(unittest.TestCase):
 
     def test_set_euo_pipefail_present(self):
         self.assertIn("set -euo pipefail", self.text)
+
+    def test_whole_script_lock_precedes_mode_branching(self):
+        # 通常モードと緊急モードの同時実行による台帳競合(Codexレビュー
+        # 指摘)を防ぐため、flockによる排他ロックがURGENT_MODEの分岐より
+        # 前(=両モード共通)に存在する必要がある。
+        self.assertIn("flock", self.text)
+        lock_pos = self.text.index("flock")
+        urgent_mode_var_pos = self.text.index("URGENT_MODE=0")
+        self.assertLess(lock_pos, urgent_mode_var_pos, "ロック取得は引数解析・モード分岐より前に必要")
+
+
+class UrgentModeRoutingTest(unittest.TestCase):
+    """緊急ニュース処理モード(--urgent --issue N)の静的構造検証(Phase 4)。
+
+    run.sh自体はclaude CLI・gh認証に依存するためエンドツーエンドでは
+    実行できない。テキスト構造を検査し、以下を静的に保証する:
+
+    - --urgentと--issueは常にセットで必要(片方だけはusage表示して失敗)
+    - --issueは正の整数のみを許可する検査がある
+    - 緊急モードはRSS(collect.py)を一切呼ばない
+    - 緊急モード専用のファイル名(URGENT_*)は通常モード(RAW/TMP/OUT/
+      WORK_PENDING)と衝突しない別変数を使う
+    - 緊急便の同一Issue上書き防止チェックがfetch-single呼び出しより前にある
+    - fetch-singleの終了コード(0/2/その他)で分岐し、2はcommit-pending
+      してRSSへ行かずexit 0、その他はexit 1(RSSフォールバックしない)
+    - 台帳のcommit-pendingは、成功時(0→validate成功後)と重複のみ(2)
+      の場合にのみ呼ばれる
+    - 緊急モードのブロックにもgh書き込み系操作が存在しない
+    """
+
+    def setUp(self):
+        self.text = RUN_SH.read_text(encoding="utf-8")
+        urgent_start = self.text.index('if [ "${URGENT_MODE}" -eq 1 ]; then\n# 緊急ニュース処理モード')
+        self.urgent_block = self.text[urgent_start:]
+
+    def test_urgent_and_issue_required_together(self):
+        self.assertIn(
+            'if [ "${URGENT_MODE}" -eq 1 ] && [ -z "${URGENT_ISSUE}" ]',
+            self.text,
+        )
+        self.assertIn(
+            'if [ "${URGENT_MODE}" -eq 0 ] && [ -n "${URGENT_ISSUE}" ]',
+            self.text,
+        )
+        # どちらの片方だけ違反ブロックも使用法を表示して非ゼロ終了する。
+        for snippet in [
+            'if [ "${URGENT_MODE}" -eq 1 ] && [ -z "${URGENT_ISSUE}" ]; then\n  echo "使用法:',
+            'if [ "${URGENT_MODE}" -eq 0 ] && [ -n "${URGENT_ISSUE}" ]; then\n  echo "使用法:',
+        ]:
+            self.assertIn(snippet, self.text)
+
+    def test_issue_number_must_be_positive_integer(self):
+        self.assertRegex(
+            self.text,
+            re.compile(r'URGENT_ISSUE.*=~\s*\^\[1-9\]\[0-9\]\*\$'),
+            "run.shは--issueが正の整数であることを検証する必要がある",
+        )
+
+    def test_urgent_block_never_calls_collect_py(self):
+        self.assertNotIn("scripts/collect.py", self.urgent_block, "緊急モードはRSSへフォールバックしてはいけない")
+
+    def test_urgent_file_variables_do_not_reuse_normal_mode_names(self):
+        # 緊急モードは専用の変数名(URGENT_RAW/URGENT_TMP/URGENT_OUT/
+        # URGENT_PENDING)を使い、通常モードのRAW/TMP/OUT/WORK_PENDINGと
+        # 衝突しない。
+        for var in ["URGENT_RAW", "URGENT_TMP", "URGENT_OUT", "URGENT_PENDING"]:
+            self.assertIn(var, self.urgent_block)
+        self.assertNotIn('"${RAW}"', self.urgent_block)
+        self.assertNotIn('"${TMP}"', self.urgent_block)
+        self.assertNotIn('"${OUT}"', self.urgent_block)
+        self.assertNotIn('"${WORK_PENDING}"', self.urgent_block)
+
+    def test_urgent_filenames_include_issue_number_suffix(self):
+        self.assertIn('URGENT_SUFFIX="urgent-issue${URGENT_ISSUE}"', self.urgent_block)
+        self.assertIn('URGENT_RAW="data/raw/${TODAY}-${URGENT_SUFFIX}.json"', self.urgent_block)
+        self.assertIn('URGENT_TMP="drafts/.tmp_${TODAY}-${URGENT_SUFFIX}.md"', self.urgent_block)
+        self.assertIn('URGENT_OUT="drafts/${TODAY}-${URGENT_SUFFIX}.md"', self.urgent_block)
+        self.assertIn(
+            'URGENT_PENDING="data/state/.pending_${TODAY}-${URGENT_SUFFIX}.json"', self.urgent_block
+        )
+
+    def test_urgent_overwrite_guard_precedes_fetch_single_call(self):
+        guard_pos = self.urgent_block.index('-s "${URGENT_OUT}"')
+        fetch_pos = self.urgent_block.index("scripts/import_work_news.py fetch-single")
+        self.assertLess(guard_pos, fetch_pos, "既存の緊急下書きの上書き防止チェックはfetch-single呼び出しより前に必要")
+        guard_block = extract_if_block(self.urgent_block, '-s "${URGENT_OUT}"')
+        self.assertIsNotNone(guard_block)
+        self.assertIn("exit 0", guard_block)
+
+    def test_fetch_single_exit_code_branches_and_never_falls_back_to_rss(self):
+        self.assertRegex(self.urgent_block, r"URGENT_FETCH_RC=\$\?")
+        case_match = re.search(r'case "\$\{URGENT_FETCH_RC\}" in\n(.*?)\nesac', self.urgent_block, re.S)
+        self.assertIsNotNone(case_match, "URGENT_FETCH_RCで分岐するcase文が見つかりません")
+        case_body = case_match.group(1)
+
+        branch_2 = re.search(r"2\)\n(.*?);;", case_body, re.S).group(1)
+        self.assertIn("commit-pending", branch_2)
+        self.assertIn("exit 0", branch_2)
+        self.assertNotIn("claude -p", branch_2, "重複のみの場合はclaude -pを呼んではいけない")
+
+        branch_default = re.search(r"\*\)\n(.*?);;", case_body, re.S).group(1)
+        self.assertIn("exit 1", branch_default)
+        self.assertNotIn("scripts/collect.py", branch_default, "緊急モード失敗時にRSSへフォールバックしてはいけない")
+
+    def test_commit_pending_called_only_after_validate_success_or_duplicate(self):
+        # validate成功→mvの直後にのみ、成功時のcommit-pendingが呼ばれる。
+        mv_pos = self.urgent_block.index('mv "${URGENT_TMP}" "${URGENT_OUT}"')
+        commit_positions = [
+            m.start() for m in re.finditer(r"import_work_news\.py commit-pending", self.urgent_block)
+        ]
+        self.assertTrue(any(pos > mv_pos for pos in commit_positions), "validate成功(mv)後にcommit-pendingを呼ぶ必要がある")
+
+        # commit-pending呼び出しはちょうど2箇所(重複のみ分岐と成功分岐)
+        # のみで、それ以外(例えばvalidate失敗時)には存在しない。
+        self.assertEqual(len(commit_positions), 2, "commit-pendingは重複のみ分岐と成功分岐の2箇所だけに存在するべき")
+
+        # 重複のみ(2)分岐のcommit-pendingは、fetch-single呼び出しより後・
+        # mvより前に位置する(claude -p/validateを経由しないため)。
+        fetch_pos = self.urgent_block.index("scripts/import_work_news.py fetch-single")
+        self.assertTrue(any(fetch_pos < pos < mv_pos for pos in commit_positions), "重複のみ分岐のcommit-pendingが正しい位置にありません")
+
+    def test_urgent_block_has_no_forbidden_gh_write_subcommands(self):
+        forbidden = [
+            "issue close",
+            "issue comment",
+            "issue edit",
+            "issue reopen",
+            "issue delete",
+            "--add-label",
+            "--remove-label",
+        ]
+        for snippet in forbidden:
+            self.assertNotIn(snippet, self.urgent_block, f"'{snippet}' が緊急モードブロックに存在します")
 
 
 if __name__ == "__main__":
