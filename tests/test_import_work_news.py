@@ -74,6 +74,30 @@ def make_issue(number, packet=None, body=None, created_at="2026-07-17T09:00:00Z"
     }
 
 
+def make_single_issue(
+    number,
+    packet=None,
+    body=None,
+    state="OPEN",
+    labels=("work-news",),
+    created_at="2026-07-17T09:00:00Z",
+):
+    """gh issue view相当(緊急モードのfetch_single_work_issue用)。
+
+    gh issue listのmake_issueとは異なり、state・labelsを含む。
+    """
+    if body is None:
+        body = "```json\n" + json.dumps(packet, ensure_ascii=False) + "\n```\n"
+    return {
+        "number": number,
+        "title": f"[Work News] 2026-07-17 09:00 JST (#{number})",
+        "body": body,
+        "createdAt": created_at,
+        "state": state,
+        "labels": [{"name": name} for name in labels],
+    }
+
+
 class ExtractJsonBlockTest(unittest.TestCase):
     def test_extracts_valid_json_ignoring_surrounding_prose(self):
         packet = make_packet()
@@ -466,6 +490,141 @@ class LedgerCommitTimingTest(unittest.TestCase):
         ledger = iwn.load_ledger(self.ledger_path)
         self.assertEqual(ledger["processed_issues"], [5])
         self.assertEqual(ledger["processed_event_keys"], ["event-1"])
+
+
+class PositiveIntTest(unittest.TestCase):
+    def test_valid_positive_integers_accepted(self):
+        self.assertEqual(iwn.positive_int("1"), 1)
+        self.assertEqual(iwn.positive_int("8"), 8)
+        self.assertEqual(iwn.positive_int("42"), 42)
+
+    def test_zero_rejected(self):
+        with self.assertRaises(iwn.argparse.ArgumentTypeError):
+            iwn.positive_int("0")
+
+    def test_negative_rejected(self):
+        with self.assertRaises(iwn.argparse.ArgumentTypeError):
+            iwn.positive_int("-3")
+
+    def test_non_numeric_rejected(self):
+        with self.assertRaises(iwn.argparse.ArgumentTypeError):
+            iwn.positive_int("abc")
+
+
+class FetchSingleWorkIssueTest(unittest.TestCase):
+    """緊急モード(--urgent --issue N)の中核: fetch_single_work_issueが、
+    指定Issue1件だけをピンポイントで確認し、他の未処理Issueを一切
+    混ぜないことを検証する。gh issue viewはモックし完全にオフラインで
+    テストする。
+    """
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.ledger_path = pathlib.Path(self._tmpdir.name) / "processed_work_issues.json"
+
+    def write_ledger(self, processed_issues=None, processed_event_keys=None):
+        iwn.write_json_atomic(
+            self.ledger_path,
+            {
+                "processed_issues": processed_issues or [],
+                "processed_event_keys": processed_event_keys or [],
+            },
+        )
+
+    def test_valid_open_issue_returns_ok(self):
+        issue = make_single_issue(8, make_packet())
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue) as mocked:
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        mocked.assert_called_once_with("owner/repo", 8)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["articles"]), 1)
+        self.assertEqual(result["issue_numbers"], [8])
+        self.assertEqual(result["event_keys"], ["event-1"])
+
+    def test_only_specified_issue_is_queried_others_not_mixed_in(self):
+        # gh issue list(複数Issue一覧)は一切呼ばれない。run_gh_issue_list
+        # をモックせず放置しても、fetch_single_work_issueが誤って呼び
+        # 出せば例外(未モック)になるため、この構造自体が保証になる。
+        issue = make_single_issue(8, make_packet())
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            with mock.patch.object(
+                iwn, "run_gh_issue_list", side_effect=AssertionError("gh issue listは呼ばれてはいけない")
+            ):
+                result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "ok")
+
+    def test_already_processed_issue_number_returns_duplicate_only_with_empty_issue_numbers(self):
+        self.write_ledger(processed_issues=[8])
+        issue = make_single_issue(8, make_packet())
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "duplicate_only")
+        self.assertEqual(result["articles"], [])
+        # 既に台帳へ記録済みのため、再度pendingへ書く必要はない(空)。
+        self.assertEqual(result["issue_numbers"], [])
+
+    def test_all_event_keys_already_processed_returns_duplicate_only_with_issue_number(self):
+        self.write_ledger(processed_event_keys=["event-1"])
+        issue = make_single_issue(8, make_packet())
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "duplicate_only")
+        self.assertEqual(result["articles"], [])
+        self.assertEqual(result["issue_numbers"], [8])
+
+    def test_closed_issue_rejected_as_invalid(self):
+        issue = make_single_issue(8, make_packet(), state="CLOSED")
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["articles"], [])
+        self.assertTrue(any("open状態ではありません" in m for m in result["messages"]))
+
+    def test_issue_without_work_news_label_rejected_as_invalid(self):
+        issue = make_single_issue(8, make_packet(), labels=("bug",))
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "invalid")
+        self.assertTrue(any("work-newsラベルがありません" in m for m in result["messages"]))
+
+    def test_malformed_json_rejected_as_invalid(self):
+        issue = make_single_issue(8, body="コードブロックが無い不正な本文です。")
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "invalid")
+        self.assertEqual(result["articles"], [])
+
+    def test_invalid_packet_structure_rejected_as_invalid(self):
+        issue = make_single_issue(8, make_packet(articles=[]))
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "invalid")
+
+    def test_gh_error_propagates_as_gh_error_status(self):
+        with mock.patch.object(iwn, "run_gh_issue_view", side_effect=iwn.GhFetchError("未認証です")):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "gh_error")
+        self.assertEqual(result["articles"], [])
+
+    def test_fetch_single_does_not_write_ledger(self):
+        issue = make_single_issue(8, make_packet())
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertFalse(self.ledger_path.exists(), "fetch_single_work_issueは台帳ファイルを作成・書き換えしてはいけない")
+
+    def test_only_new_event_key_included_when_issue_has_one_duplicate_and_one_new(self):
+        self.write_ledger(processed_event_keys=["event-1"])
+        articles = [
+            make_article(eventKey="event-1", link="https://example.com/1"),
+            make_article(eventKey="event-2", link="https://example.com/2"),
+        ]
+        issue = make_single_issue(8, make_packet(articles=articles))
+        with mock.patch.object(iwn, "run_gh_issue_view", return_value=issue):
+            result = iwn.fetch_single_work_issue("owner/repo", 8, self.ledger_path)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["articles"]), 1)
+        self.assertEqual(result["articles"][0]["eventKey"], "event-2")
 
 
 class ReadOnlyGitHubScopeTest(unittest.TestCase):

@@ -101,6 +101,35 @@ def run_gh_issue_list(repo):
         raise GhFetchError(f"gh issue list 出力のJSON解析失敗: {e}") from e
 
 
+def run_gh_issue_view(repo, issue_number):
+    """gh issue view <番号> を実行し、Issue1件の詳細を返す(読み取り専用)。
+
+    緊急モード(--urgent --issue N)専用。指定Issueだけをピンポイントで
+    確認するために使う。書き込み系のgh操作は一切行わない。
+    """
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "view", str(issue_number),
+                "--repo", repo,
+                "--json", "number,state,title,body,createdAt,labels",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise GhFetchError(f"gh issue view 実行失敗: {e}") from e
+
+    if result.returncode != 0:
+        raise GhFetchError(f"gh issue view 終了コード{result.returncode}: {result.stderr.strip()}")
+
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise GhFetchError(f"gh issue view 出力のJSON解析失敗: {e}") from e
+
+
 def extract_json_block(body):
     """Issue本文から唯一のJSONコードブロックを抽出しパースする。
 
@@ -363,6 +392,114 @@ def fetch_new_work_articles(repo, ledger_path):
     }
 
 
+def fetch_single_work_issue(repo, issue_number, ledger_path):
+    """緊急モード(--urgent --issue N)用: 指定Issue番号だけを取得する。
+
+    通常のfetch_new_work_articlesとは異なり、他の未処理Issueを一切
+    混ぜない(指定Issueのみをピンポイントで確認する)。1回のfetchあたりの
+    件数上限(MAX_ARTICLES)は単一Issue内のarticles件数に対して
+    validate_packetが検証する既存の制約がそのまま適用される。
+
+    戻り値のstatus:
+      "ok"(有効な新規記事あり) / "duplicate_only"(Issue番号または
+      全eventKeyが既に処理済みで変換対象がない) / "invalid"(Issueが
+      open状態でない・work-newsラベルがない・JSON不正) /
+      "gh_error"(gh呼び出し自体が失敗)
+    """
+    ledger = load_ledger(ledger_path)
+    processed_issues = set(ledger.get("processed_issues", []))
+    processed_event_keys = set(ledger.get("processed_event_keys", []))
+
+    try:
+        issue = run_gh_issue_view(repo, issue_number)
+    except GhFetchError as e:
+        return {
+            "status": "gh_error",
+            "articles": [],
+            "issue_numbers": [],
+            "event_keys": [],
+            "messages": [f"Issue #{issue_number} の取得に失敗しました: {e}"],
+        }
+
+    number = issue.get("number")
+    if number in processed_issues:
+        return {
+            "status": "duplicate_only",
+            "articles": [],
+            "issue_numbers": [],
+            "event_keys": [],
+            "messages": [f"Issue #{issue_number} は既に処理済みです"],
+        }
+
+    if issue.get("state") != "OPEN":
+        return {
+            "status": "invalid",
+            "articles": [],
+            "issue_numbers": [],
+            "event_keys": [],
+            "messages": [f"Issue #{issue_number} はopen状態ではありません(state={issue.get('state')!r})"],
+        }
+
+    label_names = {
+        lbl.get("name") for lbl in issue.get("labels", []) if isinstance(lbl, dict)
+    }
+    if "work-news" not in label_names:
+        return {
+            "status": "invalid",
+            "articles": [],
+            "issue_numbers": [],
+            "event_keys": [],
+            "messages": [f"Issue #{issue_number} にwork-newsラベルがありません"],
+        }
+
+    try:
+        packet = extract_json_block(issue.get("body"))
+    except ValueError as e:
+        return {
+            "status": "invalid",
+            "articles": [],
+            "issue_numbers": [],
+            "event_keys": [],
+            "messages": [f"Issue #{issue_number}: {e}"],
+        }
+
+    reasons = validate_packet(packet)
+    if reasons:
+        return {
+            "status": "invalid",
+            "articles": [],
+            "issue_numbers": [],
+            "event_keys": [],
+            "messages": [f"Issue #{issue_number}: パケット検証失敗: {'; '.join(reasons)}"],
+        }
+
+    new_articles = []
+    new_event_keys = []
+    for article in packet["articles"]:
+        event_key = article["eventKey"]
+        if event_key in processed_event_keys or event_key in new_event_keys:
+            continue
+        new_articles.append(normalize_work_article(article))
+        new_event_keys.append(event_key)
+
+    if not new_articles:
+        return {
+            "status": "duplicate_only",
+            "articles": [],
+            "issue_numbers": [number],
+            "event_keys": [],
+            "messages": [f"Issue #{issue_number} は有効ですが、全記事が処理済みのため変換対象がありません"],
+        }
+
+    return {
+        "status": "ok",
+        "articles": new_articles,
+        "issue_numbers": [number],
+        "event_keys": new_event_keys,
+        "messages": [],
+    }
+
+
 def cmd_fetch(args):
     result = fetch_new_work_articles(args.repo, args.ledger)
     for msg in result["messages"]:
@@ -386,10 +523,50 @@ def cmd_fetch(args):
     return 0
 
 
+def cmd_fetch_single(args):
+    result = fetch_single_work_issue(args.repo, args.issue, args.ledger)
+    for msg in result["messages"]:
+        print(f"[WARN] {msg}", file=sys.stderr)
+
+    if result["status"] == "duplicate_only":
+        if result["issue_numbers"]:
+            write_pending(args.pending_out, result["issue_numbers"], result["event_keys"])
+            print(
+                f"[INFO] Issue #{args.issue} は新規記事なしのため処理済みとして確定します",
+                file=sys.stderr,
+            )
+        else:
+            print(f"[INFO] Issue #{args.issue} は既に処理済みです", file=sys.stderr)
+        return 2
+
+    if result["status"] != "ok":
+        print(f"[ERROR] Issue #{args.issue} を使用できません(status={result['status']})", file=sys.stderr)
+        return 1
+
+    write_json_atomic(args.out, result["articles"])
+    write_pending(args.pending_out, result["issue_numbers"], result["event_keys"])
+    print(
+        f"緊急Issue #{args.issue} の記事{len(result['articles'])}件を取得しました: {args.out}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def cmd_commit_pending(args):
     commit_pending(args.pending, args.ledger)
     print(f"Work Issue処理済み台帳を更新しました: {args.ledger}", file=sys.stderr)
     return 0
+
+
+def positive_int(value):
+    """argparse用の型変換: 正の整数のみ許可する(緊急モードのIssue番号)。"""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"正の整数である必要があります: {value!r}") from None
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"正の整数である必要があります: {value!r}")
+    return n
 
 
 def build_parser():
@@ -402,6 +579,16 @@ def build_parser():
     p_fetch.add_argument("--out", required=True)
     p_fetch.add_argument("--pending-out", required=True)
     p_fetch.set_defaults(func=cmd_fetch)
+
+    p_fetch_single = sub.add_parser(
+        "fetch-single", help="緊急モード: 指定Issue番号だけを取得する(他の未処理Issueは混ぜない)"
+    )
+    p_fetch_single.add_argument("--repo", required=True)
+    p_fetch_single.add_argument("--issue", required=True, type=positive_int)
+    p_fetch_single.add_argument("--ledger", default=DEFAULT_LEDGER_PATH)
+    p_fetch_single.add_argument("--out", required=True)
+    p_fetch_single.add_argument("--pending-out", required=True)
+    p_fetch_single.set_defaults(func=cmd_fetch_single)
 
     p_commit = sub.add_parser("commit-pending", help="pendingを確定台帳へ反映する")
     p_commit.add_argument("--pending", required=True)
