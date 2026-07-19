@@ -123,6 +123,10 @@ sourceDifferences(情報源間の食い違い)がある場合は、cautionsフ�
 - `speaking`は上記9種とは異なる専用の強度語を使う(`speaking-weak`等は
   使わない): `speaking-small`・`speaking-normal`・`speaking-forceful`
 
+`image_prompt`(英語プロンプト)の感情表現は、同じコマの`expression`タグと
+整合させること(例: `expression`が`surprise-medium`なら、`image_prompt`に
+`joyful`のような別の感情語を混在させない)。
+
 `reference_image`は、対応キャラクターの表情タグに沿ったファイル名を
 記載する(実際のファイルがまだ存在しない場合でも、意図する名称を
 記載してよい。前提条件はdocs/manga-pipeline.md参照)。
