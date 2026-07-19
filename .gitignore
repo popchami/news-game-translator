@@ -6,5 +6,6 @@ data/state/processed_work_issues.json
 data/state/.pending_*.json
 data/state/recent_rss_links.json
 data/state/.run.lock
+drafts/manga_packets/*.json
 __pycache__/
 *.pyc
