@@ -12,7 +12,10 @@ import json
 import pathlib
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -83,6 +86,25 @@ class ListPacketsTest(unittest.TestCase):
         items = si.list_packets()
         self.assertEqual([i["filename"] for i in items], ["a.json", "b.json"])
 
+    def test_symlink_escaping_packets_dir_excluded_from_list(self):
+        # load_packetだけでなくlist_packetsも、PACKETS_DIR外を指す
+        # シンボリックリンクを一覧から除外することを確認する
+        # (Codexレビュー指摘: 以前はload_packetのみがこの境界チェックを
+        # 持っていた)。
+        outside_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(outside_dir.cleanup)
+        outside_file = pathlib.Path(outside_dir.name) / "secret.json"
+        write_json(outside_file, {"source": {"title": "秘密の記事"}})
+
+        link_path = self.packets_dir / "link.json"
+        try:
+            link_path.symlink_to(outside_file)
+        except (OSError, NotImplementedError):
+            self.skipTest("この環境はシンボリックリンクを作成できません")
+
+        items = si.list_packets()
+        self.assertEqual(items, [])
+
 
 class LoadPacketTest(unittest.TestCase):
     def setUp(self):
@@ -150,6 +172,85 @@ class SafeFilenameRegexTest(unittest.TestCase):
         for name in ["../a.json", "a/b.json", "a.json.bak", "a.JSON", "", "a json.json"]:
             with self.subTest(name=name):
                 self.assertFalse(si.SAFE_FILENAME_RE.match(name))
+
+
+class HttpRoutingTest(unittest.TestCase):
+    """実際にサーバーを起動し、do_GET・PACKET_PATH_REを生のHTTPリクエスト
+    経由で検証する(Codexレビュー指摘: 従来のテストは純粋関数のみを検証
+    しており、ルーティング層自体は未検証だった)。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        cls.packets_dir = pathlib.Path(cls._tmpdir.name)
+        cls._patcher = mock.patch.object(si, "PACKETS_DIR", cls.packets_dir)
+        cls._patcher.start()
+        write_json(
+            cls.packets_dir / "a.json",
+            {"created_at": "2026-07-19T00:00:00Z", "source": {"title": "A"}},
+        )
+
+        cls.server = si.ThreadingHTTPServer(("127.0.0.1", 0), si.InboxHandler)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+        cls._patcher.stop()
+        cls._tmpdir.cleanup()
+
+    def _get(self, path):
+        url = "http://127.0.0.1:" + str(self.port) + path
+        try:
+            with urllib.request.urlopen(url, timeout=5) as res:
+                return res.status, res.read()
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, e.read()
+
+    def test_index_served(self):
+        status, body = self._get("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"<html", body.lower())
+
+    def test_packets_list_endpoint(self):
+        status, body = self._get("/api/packets")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual([i["filename"] for i in data], ["a.json"])
+
+    def test_packet_detail_endpoint(self):
+        status, body = self._get("/api/packets/a.json")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["source"]["title"], "A")
+
+    def test_unknown_packet_returns_404(self):
+        status, _ = self._get("/api/packets/missing.json")
+        self.assertEqual(status, 404)
+
+    def test_url_encoded_traversal_rejected(self):
+        for path in [
+            "/api/packets/%2e%2e%2fetc%2fpasswd",
+            "/api/packets/..%2fsecret.json",
+            "/api/packets/..%2f..%2fetc%2fpasswd.json",
+        ]:
+            with self.subTest(path=path):
+                status, _ = self._get(path)
+                self.assertEqual(status, 404, path)
+
+    def test_query_string_appended_to_filename_rejected(self):
+        status, _ = self._get("/api/packets/a.json?x=1")
+        self.assertEqual(status, 404)
+
+    def test_unrelated_path_returns_404(self):
+        status, _ = self._get("/does-not-exist")
+        self.assertEqual(status, 404)
 
 
 if __name__ == "__main__":

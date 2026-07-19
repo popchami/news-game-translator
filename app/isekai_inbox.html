@@ -195,6 +195,13 @@ function escapeHtml(s) {
   });
 }
 
+function isSafeHttpUrl(url) {
+  // href属性はHTMLエスケープだけではjavascript:等の実行可能スキームを
+  // 防げないため、http/httpsのみをリンクとして許可する(Codexレビュー
+  // 指摘)。
+  return /^https?:\/\//i.test(String(url || ""));
+}
+
 function formatDate(iso) {
   if (!iso) return "(日時不明)";
   var m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
@@ -277,12 +284,18 @@ function showDetail(encodedFilename) {
       html += "<h2>元記事</h2>";
       html += '<div class="source-title">' + escapeHtml(source.title) + "</div>";
       if (source.url) {
-        html +=
-          '<div class="source-link"><a href="' +
-          escapeHtml(source.url) +
-          '" target="_blank" rel="noopener">' +
-          escapeHtml(source.url) +
-          "</a></div>";
+        if (isSafeHttpUrl(source.url)) {
+          html +=
+            '<div class="source-link"><a href="' +
+            escapeHtml(source.url) +
+            '" target="_blank" rel="noopener">' +
+            escapeHtml(source.url) +
+            "</a></div>";
+        } else {
+          // http/https以外のスキームはリンク化せず、プレーンテキストとして
+          // 表示する(javascript:等の実行可能スキーム対策)。
+          html += '<div class="source-link">' + escapeHtml(source.url) + "</div>";
+        }
       }
       if (source.summary) {
         html += "<p>" + escapeHtml(source.summary) + "</p>";

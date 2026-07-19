@@ -33,6 +33,23 @@ SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.json$")
 PACKET_PATH_RE = re.compile(r"^/api/packets/([A-Za-z0-9._-]+\.json)$")
 
 
+def _is_contained_in_packets_dir(path):
+    """pathがPACKETS_DIR直下に実体として存在するかを確認する
+    (シンボリックリンク等でPACKETS_DIR外を指すファイルを除外する)。
+    list_packets・load_packetの両方で同じ判定基準を使う(Codexレビュー
+    指摘: 以前はload_packetのみがこの境界チェックを持っていた)。
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    try:
+        packets_dir_resolved = PACKETS_DIR.resolve()
+    except OSError:
+        return False
+    return resolved.parent == packets_dir_resolved
+
+
 def list_packets():
     """PACKETS_DIR配下のPacket一覧を、日付・タイトル・状態つきで返す。
 
@@ -44,6 +61,8 @@ def list_packets():
 
     items = []
     for path in sorted(PACKETS_DIR.glob("*.json")):
+        if not _is_contained_in_packets_dir(path):
+            continue
         try:
             with path.open(encoding="utf-8") as f:
                 packet = json.load(f)
@@ -75,13 +94,12 @@ def load_packet(filename):
         return None
 
     path = PACKETS_DIR / filename
+    # SAFE_FILENAME_REでスラッシュ・".."等は既に排除しているが、
+    # シンボリックリンク経由の脱出等に備えて二重に確認する。
+    if not _is_contained_in_packets_dir(path):
+        return None
     try:
-        resolved = path.resolve()
-        # SAFE_FILENAME_REでスラッシュ・".."等は既に排除しているが、
-        # シンボリックリンク経由の脱出等に備えて二重に確認する。
-        if resolved.parent != PACKETS_DIR.resolve():
-            return None
-        with resolved.open(encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
