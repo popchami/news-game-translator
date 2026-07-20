@@ -19,6 +19,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import manga_schema  # noqa: E402
 import validate_manga as vm  # noqa: E402
 
 from test_manga_schema import make_packet, make_panel, make_panels  # noqa: E402
@@ -239,6 +240,123 @@ class BuildTextBlobTest(unittest.TestCase):
         raw_article = {"title": "固有タイトル語", "link": "https://example.com/x", "confirmedFacts": ["固有事実語"]}
         blob = vm.build_source_text_blob(source, raw_article=raw_article)
         self.assertIn("固有事実語", blob)
+
+
+def _make_chatgpt_route_packet():
+    """panels1〜4をハルト・ナツキ(reference_images複数形)、書記官は
+    scribe_note専任とした、ChatGPTルート仕様に沿ったPacketを返す。
+    """
+    panels = []
+    for i in range(4):
+        panel = make_panel(i + 1)
+        del panel["reference_image"]
+        panel["reference_images"] = {
+            "ハルト": "haruto/surprise-medium.png",
+            "ナツキ": "natsuki/neutral.png",
+        }
+        panels.append(panel)
+    return make_packet(characters=["ハルト", "ナツキ", "書記官"], panels=panels)
+
+
+class ChatGptRouteValidationTest(unittest.TestCase):
+    """validate_chatgpt_route: panels1〜4=ハルト・ナツキ専任、
+    charactersは{ハルト,ナツキ,書記官}のみという追加制約を検証する。
+    """
+
+    def test_valid_chatgpt_route_packet_passes(self):
+        packet = _make_chatgpt_route_packet()
+        self.assertEqual(vm.validate_chatgpt_route(packet), [])
+
+    def test_generic_structural_validation_still_passes_for_same_packet(self):
+        # ChatGPTルート追加検証と、既存の汎用構造検証は独立して両方合格する。
+        packet = _make_chatgpt_route_packet()
+        self.assertEqual(manga_schema.validate_packet(packet), [])
+
+    def test_panel_using_legacy_singular_reference_image_rejected(self):
+        # ChatGPTルートではreference_images(複数形)が必須。
+        packet = _make_chatgpt_route_packet()
+        packet["panels"][0] = make_panel(1)  # legacy単数のreference_imageに戻す
+        reasons = vm.validate_chatgpt_route(packet)
+        self.assertTrue(any("reference_images(複数形)の指定が必要です" in r for r in reasons))
+
+    def test_scribe_in_panel_reference_images_rejected(self):
+        packet = _make_chatgpt_route_packet()
+        packet["panels"][3]["reference_images"] = {"書記官": "scribe/speaking-normal.png"}
+        reasons = vm.validate_chatgpt_route(packet)
+        self.assertTrue(
+            any("ChatGPTルートで許可されないキャラクター" in r and "書記官" in r for r in reasons)
+        )
+
+    def test_akira_or_fuyumi_in_panel_reference_images_rejected(self):
+        packet = _make_chatgpt_route_packet()
+        packet["panels"][0]["reference_images"] = {"アキラ": "akira/neutral.png"}
+        reasons = vm.validate_chatgpt_route(packet)
+        self.assertTrue(any("アキラ" in r for r in reasons))
+
+    def test_top_level_characters_with_akira_rejected(self):
+        packet = _make_chatgpt_route_packet()
+        packet["characters"] = ["ハルト", "アキラ"]
+        reasons = vm.validate_chatgpt_route(packet)
+        self.assertTrue(any("アキラ" in r for r in reasons))
+
+    def test_top_level_characters_with_scribe_allowed(self):
+        # 書記官はscribe_note(第5コマ)専任だがcharacters一覧への記載自体は
+        # 許可する(トップレベルcharactersはパネル出演とは別概念のため)。
+        packet = _make_chatgpt_route_packet()
+        packet["characters"] = ["ハルト", "書記官"]
+        self.assertEqual(vm.validate_chatgpt_route(packet), [])
+
+    def test_non_dict_packet_rejected(self):
+        self.assertTrue(vm.validate_chatgpt_route("not-a-dict"))
+
+    def test_malformed_panel_does_not_crash(self):
+        packet = _make_chatgpt_route_packet()
+        packet["panels"][0] = "not-a-dict"
+        # クラッシュしないことを確認する(型不正の詳細検出はmanga_schema側の責務)。
+        vm.validate_chatgpt_route(packet)
+
+    def test_default_make_packet_using_legacy_single_reference_image_fails_route_check(self):
+        # 既存のmake_packet()(reference_image単数、characters=ハルト/アキラ/書記官)は
+        # 汎用構造検証(manga_schema.validate_packet)には合格し続けるが、
+        # ChatGPTルート追加検証には合格しない(後方互換と新ルート制約は別レイヤー)。
+        packet = make_packet()
+        self.assertEqual(manga_schema.validate_packet(packet), [])
+        self.assertTrue(vm.validate_chatgpt_route(packet))
+
+
+class ChatGptRouteExampleFileTest(unittest.TestCase):
+    """data/state/manga_packet.chatgpt_route.example.json が、構造検証・
+    ChatGPTルート追加検証・禁止語検証のすべてに合格することを確認する。
+    """
+
+    def _load(self):
+        example_path = ROOT / "data" / "state" / "manga_packet.chatgpt_route.example.json"
+        with example_path.open(encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_passes_generic_structural_validation(self):
+        packet = self._load()
+        self.assertEqual(manga_schema.validate_packet(packet), [])
+
+    def test_passes_chatgpt_route_validation(self):
+        packet = self._load()
+        self.assertEqual(vm.validate_chatgpt_route(packet), [])
+
+    def test_passes_full_validate_manga_packet(self):
+        # 禁止語検証(scripts/banned_terms.py)も含めて合格することを確認する。
+        packet = self._load()
+        self.assertEqual(vm.validate_manga_packet(packet), [])
+
+    def test_legacy_example_file_does_not_pass_chatgpt_route_validation(self):
+        # 旧形式サンプル(data/state/manga_packet.example.json)は、
+        # 構造検証には合格し続けるが、ChatGPTルート追加検証には合格しない
+        # (4コマ目が書記官であるため)。新旧の使い分けが機能していることの
+        # 回帰確認。
+        legacy_path = ROOT / "data" / "state" / "manga_packet.example.json"
+        with legacy_path.open(encoding="utf-8") as f:
+            legacy_packet = json.load(f)
+        self.assertEqual(manga_schema.validate_packet(legacy_packet), [])
+        self.assertTrue(vm.validate_chatgpt_route(legacy_packet))
 
 
 class CliSourceJsonArgumentTest(unittest.TestCase):

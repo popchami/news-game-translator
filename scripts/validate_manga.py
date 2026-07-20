@@ -104,6 +104,75 @@ def validate_manga_packet(packet, raw_article=None):
     return reasons
 
 
+# ChatGPTルート(docs/manga-pipeline.md)専用の追加検証で許可するキャラクター。
+# manga_schema.ALLOWED_CHARACTERS(5人から自由選択)は、RunPodルート等での
+# 再利用を想定して汎用のまま維持する。ChatGPTルート固有の制約(panels1〜4は
+# ハルト・ナツキ専任、書記官はscribe_note〔第5コマ〕専任)は、構造検証とは
+# 別にこちらで追加検証する。
+CHATGPT_ROUTE_ALLOWED_CHARACTERS = ["ハルト", "ナツキ", "書記官"]
+CHATGPT_ROUTE_PANEL_CHARACTERS = ["ハルト", "ナツキ"]
+
+
+def _validate_chatgpt_route_panel(panel, index):
+    """panels[index]がChatGPTルートの制約(reference_images〔複数形〕必須・
+    キャラクターはハルト・ナツキのみ)を満たすかを検証する。
+
+    型不正(reference_imagesが辞書でない等)はmanga_schema.validate_packet側で
+    既に検出されるため、ここでは重複したエラーを出さない。
+    """
+    if "reference_images" not in panel:
+        return [
+            f"panels[{index}]はChatGPTルートではreference_images(複数形)の指定が必要です"
+            "(reference_image〔単数〕はこのルートでは使用しない)"
+        ]
+
+    value = panel.get("reference_images")
+    if not isinstance(value, dict):
+        return []
+
+    reasons = []
+    for name in value.keys():
+        if name not in CHATGPT_ROUTE_PANEL_CHARACTERS:
+            reasons.append(
+                f"panels[{index}].reference_imagesにChatGPTルートで許可されないキャラクターが"
+                f"含まれています: {name!r}(許可: {', '.join(CHATGPT_ROUTE_PANEL_CHARACTERS)})"
+            )
+    return reasons
+
+
+def validate_chatgpt_route(packet):
+    """ChatGPTルート専用の追加検証(構造検証・禁止語検証とは別レイヤー)。
+
+    このパケットが辞書であること、packet_versionが正しいこと、panelsが
+    4要素の配列であること等の一般構造は、manga_schema.validate_packetが
+    既に検証している前提とし、ここでは再検証しない。呼び出し側は通常
+    `manga_schema.validate_packet(packet) + validate_chatgpt_route(packet)`
+    のように両方の結果を合算して使う。
+    """
+    if not isinstance(packet, dict):
+        return ["パケットのルートはオブジェクトである必要があります"]
+
+    reasons = []
+
+    characters = packet.get("characters")
+    if isinstance(characters, list):
+        for name in characters:
+            if isinstance(name, str) and name not in CHATGPT_ROUTE_ALLOWED_CHARACTERS:
+                reasons.append(
+                    f"ChatGPTルートではcharactersに{name!r}を含められません"
+                    f"(許可: {', '.join(CHATGPT_ROUTE_ALLOWED_CHARACTERS)})"
+                )
+
+    panels = packet.get("panels")
+    if isinstance(panels, list):
+        for idx, panel in enumerate(panels):
+            if not isinstance(panel, dict):
+                continue
+            reasons.extend(_validate_chatgpt_route_panel(panel, idx))
+
+    return reasons
+
+
 def main():
     if len(sys.argv) not in (2, 3):
         print("usage: validate_manga.py <packet_file> [<source_json>]", file=sys.stderr)

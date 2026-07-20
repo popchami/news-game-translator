@@ -73,13 +73,17 @@ def is_valid_iso8601(value):
     return isinstance(value, str) and bool(ISO8601_RE.match(value))
 
 REQUIRED_SOURCE_STR_FIELDS = ["title", "url", "summary"]
+# 決定済み/未決定/今後の手続き。ChatGPTルート(docs/manga-pipeline.md)の
+# Step1で使うが、任意フィールドとし後方互換を維持する(未指定の既存Packetは
+# 従来通り合格する)。該当情報がない項目を無理に埋める必要はないため、
+# 空文字列も許容する(必須3フィールドと異なり非空チェックは行わない)。
+OPTIONAL_SOURCE_STR_FIELDS = ["decided", "not_decided", "next_step"]
 REQUIRED_PANEL_STR_FIELDS = [
     "scene",
     "dialogue",
     "expression",
     "background",
     "image_prompt",
-    "reference_image",
 ]
 
 
@@ -93,6 +97,13 @@ def validate_source(source):
         value = source.get(field)
         if not isinstance(value, str) or value == "":
             reasons.append(f"source.{field}が不正です(空でない文字列である必要)")
+
+    for field in OPTIONAL_SOURCE_STR_FIELDS:
+        if field not in source:
+            continue
+        value = source.get(field)
+        if not isinstance(value, str):
+            reasons.append(f"source.{field}が不正です(指定する場合は文字列である必要): {value!r}")
     return reasons
 
 
@@ -126,6 +137,49 @@ def validate_characters(characters):
     return reasons
 
 
+def _validate_panel_reference_images(panel, index):
+    """panels[index]のreference_image(単数・既存)/reference_images(複数・新規)
+    を検証する。
+
+    既存Packetとの後方互換のため、両方式は排他的に扱う: reference_images
+    (キャラクター名→ファイル名の辞書。1コマに複数キャラが映る新仕様
+    〔docs/manga-pipeline.md ChatGPTルート〕向け)が指定されていればそちらを
+    検証し、指定されていなければ従来通りreference_image(単数の非空文字列)を
+    必須として検証する。両方同時指定はあいまいさを避けるため拒否する。
+    """
+    has_single = "reference_image" in panel
+    has_multi = "reference_images" in panel
+
+    if has_single and has_multi:
+        return [
+            f"panels[{index}]にreference_imageとreference_imagesを同時に指定できません"
+        ]
+
+    if has_multi:
+        value = panel.get("reference_images")
+        if not isinstance(value, dict) or not value:
+            return [
+                f"panels[{index}].reference_imagesが不正です(空でないオブジェクトである必要)"
+            ]
+        reasons = []
+        for name, filename in value.items():
+            if name not in ALLOWED_CHARACTERS:
+                reasons.append(
+                    f"panels[{index}].reference_imagesに許可されていないキャラクター名があります: "
+                    f"{name!r}(許可: {', '.join(ALLOWED_CHARACTERS)})"
+                )
+            if not isinstance(filename, str) or filename == "":
+                reasons.append(
+                    f"panels[{index}].reference_images[{name!r}]が不正です(空でない文字列である必要)"
+                )
+        return reasons
+
+    value = panel.get("reference_image")
+    if not isinstance(value, str) or value == "":
+        return [f"panels[{index}].reference_imageが不正です(空でない文字列である必要)"]
+    return []
+
+
 def validate_panel(panel, index):
     """panels[index]の1コマ分を検証する。"""
     if not isinstance(panel, dict):
@@ -146,9 +200,19 @@ def validate_panel(panel, index):
         if not isinstance(value, str) or value == "":
             reasons.append(f"panels[{index}].{field}が不正です(空でない文字列である必要)")
 
+    reasons.extend(_validate_panel_reference_images(panel, index))
+
     expression = panel.get("expression")
     if isinstance(expression, str) and expression != "" and expression not in ALLOWED_EXPRESSION_TAGS:
         reasons.append(f"panels[{index}].expressionが不正な表情タグです: {expression!r}")
+
+    # role(コマの役割。例: introduction/question/explanation/current_status)
+    # は任意フィールド。固定enumにはせず、指定する場合は空でない文字列である
+    # ことのみ検証する(運用の変化に対応しやすくするため。具体的な語彙は
+    # prompts/manga_script.mdで規定する)。
+    role = panel.get("role")
+    if "role" in panel and (not isinstance(role, str) or role == ""):
+        reasons.append(f"panels[{index}].roleが不正です(指定する場合は空でない文字列である必要): {role!r}")
 
     return reasons
 

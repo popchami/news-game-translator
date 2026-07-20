@@ -173,6 +173,27 @@
     color: var(--muted);
     margin-top: 6px;
   }
+  .copy-btn {
+    width: 100%;
+    margin-top: 12px;
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid var(--accent);
+    background: var(--card-bg);
+    color: var(--accent);
+    font-size: 1rem;
+    font-weight: 600;
+  }
+  .copy-btn:active {
+    opacity: 0.8;
+  }
+  .copy-note {
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 6px;
+    min-height: 1.2em;
+  }
 </style>
 </head>
 <body>
@@ -188,6 +209,7 @@
 "use strict";
 
 var EXPRESSION_LABELS = {}; // 表情タグは値をそのまま表示する(訳語は持たない)
+var currentPacket = null; // 内容確認画面で表示中のPacket(コピーボタンが参照する)
 
 function escapeHtml(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -249,16 +271,127 @@ function showInbox() {
     });
 }
 
+function panelReferenceCharacters(panel) {
+  // reference_images(複数形、新形式)のキー、またはreference_image(単数、
+  // 旧形式)のプレフィックスから、登場キャラクター名の表示用文字列を作る。
+  // 表示のみに使うため、解決の正しさはscripts/manga_schema.py側の検証に
+  // 委ねる(ここでは崩れたデータでも表示が壊れないことだけを保証する)。
+  if (panel && panel.reference_images && typeof panel.reference_images === "object") {
+    var names = Object.keys(panel.reference_images);
+    return names.length ? names.join("・") : "";
+  }
+  if (panel && typeof panel.reference_image === "string" && panel.reference_image.indexOf("/") !== -1) {
+    return panel.reference_image.split("/")[0];
+  }
+  return "";
+}
+
 function panelCard(panel) {
   var no = panel && panel.panel_no != null ? panel.panel_no : "?";
-  return (
+  var refChars = panelReferenceCharacters(panel);
+  var html =
     '<div class="panel-card">' +
     '<div class="panel-no">第' + escapeHtml(no) + "コマ</div>" +
     '<div class="dialogue">' + escapeHtml(panel && panel.dialogue) + "</div>" +
     '<div class="meta">場面: ' + escapeHtml(panel && panel.scene) + "</div>" +
     '<div class="meta">背景: ' + escapeHtml(panel && panel.background) + "</div>" +
-    '<div class="meta">表情タグ: ' + escapeHtml(panel && panel.expression) + "</div>" +
-    "</div>"
+    '<div class="meta">表情タグ: ' + escapeHtml(panel && panel.expression) + "</div>";
+  if (refChars) {
+    html += '<div class="meta">参照キャラクター: ' + escapeHtml(refChars) + "</div>";
+  }
+  html += "</div>";
+  return html;
+}
+
+function orEmptyDash(value) {
+  return value ? String(value) : "(未設定)";
+}
+
+function buildChatGptPrompt(packet) {
+  // docs/manga-pipeline.md ChatGPTルートの入力形式(節「10. ChatGPTへ渡す
+  // 入力形式」)に沿ったテキストを組み立てる。構成ルール等の固定文は
+  // 全Packet共通、ニュース情報部分のみPacketの値を差し込む。
+  var source = (packet && packet.source) || {};
+  var lines = [];
+  lines.push("【依頼】");
+  lines.push("異世界ニホンの縦読み5コマ漫画を作成する。");
+  lines.push("");
+  lines.push("【重要】");
+  lines.push("まだ画像生成しない。");
+  lines.push("最初に5コマ構成案だけをテキストで提示する。");
+  lines.push("人間が承認した後に画像生成する。");
+  lines.push("");
+  lines.push("【ニュース】");
+  lines.push("タイトル：" + orEmptyDash(source.title));
+  lines.push("URL：" + orEmptyDash(source.url));
+  lines.push("異世界ニホン化済み本文：" + orEmptyDash(packet && packet.isekai_text));
+  lines.push("事実要約：" + orEmptyDash(source.summary));
+  lines.push("決定済み：" + orEmptyDash(source.decided));
+  lines.push("未決定：" + orEmptyDash(source.not_decided));
+  lines.push("今後の手続き：" + orEmptyDash(source.next_step));
+  lines.push("書記官の解説(第5コマの元情報)：" + orEmptyDash(packet && packet.scribe_note));
+  lines.push("");
+  lines.push("【キャラクター】");
+  lines.push("第1〜4コマ：");
+  lines.push("・ハルト");
+  lines.push("・ナツキ");
+  lines.push("");
+  lines.push("第5コマ：");
+  lines.push("・書記官");
+  lines.push("");
+  lines.push("ハルトとナツキの外見は、添付した正本画像へ忠実にする。");
+  lines.push("衣装、髪型、家紋、武器、装備位置を変更しない。");
+  lines.push("正本画像は外見参照であり、画像の貼り付け・切り抜き合成はしない。");
+  lines.push("各コマの場面に合わせてポーズ・表情を新規に描く。");
+  lines.push("");
+  lines.push("【5コマ構成】");
+  lines.push("第1コマ：ニュースの導入");
+  lines.push("第2コマ：ハルトの疑問");
+  lines.push("第3コマ：ナツキの整理");
+  lines.push("第4コマ：決定済み・未決定・今後の手続きへの接続");
+  lines.push("第5コマ：書記官によるニュース解説");
+  lines.push("");
+  lines.push("【構成ルール】");
+  lines.push("・無言コマは作らない");
+  lines.push("・同じカメラアングルを2コマ続けない");
+  lines.push("・セリフは短くする");
+  lines.push("・吹き出しを大きくする");
+  lines.push("・スマートフォンで読める文字量にする");
+  lines.push("・実在人物や政治家の顔を描かない");
+  lines.push("・記事にない出来事を追加しない");
+  lines.push("・最後は書記官の中立的なニュース解説で締める");
+  lines.push("");
+  lines.push("【構成案の出力項目】");
+  lines.push("各コマについて以下を出す。");
+  lines.push("・場面");
+  lines.push("・背景");
+  lines.push("・登場人物");
+  lines.push("・位置");
+  lines.push("・動作");
+  lines.push("・表情");
+  lines.push("・カメラアングル");
+  lines.push("・セリフ");
+  lines.push("・吹き出し位置");
+  lines.push("・伝える事実");
+  return lines.join("\n");
+}
+
+function copyChatGptPrompt(packet) {
+  var noteEl = document.getElementById("copyNote");
+  var text = buildChatGptPrompt(packet);
+
+  if (!navigator.clipboard || !navigator.clipboard.writeText) {
+    if (noteEl) noteEl.textContent = "このブラウザはクリップボードコピーに対応していません。";
+    return;
+  }
+
+  navigator.clipboard.writeText(text).then(
+    function () {
+      if (noteEl) noteEl.textContent = "コピーしました。ChatGPTに貼り付けてください。";
+    },
+    function () {
+      if (noteEl) noteEl.textContent = "コピーに失敗しました。手動で選択してください。";
+    }
   );
 }
 
@@ -274,6 +407,7 @@ function showDetail(encodedFilename) {
       return res.json();
     })
     .then(function (packet) {
+      currentPacket = packet;
       var source = packet.source || {};
       var panels = Array.isArray(packet.panels) ? packet.panels : [];
       var cautions = Array.isArray(packet.cautions) ? packet.cautions : [];
@@ -331,6 +465,9 @@ function showDetail(encodedFilename) {
         html += "</ul>";
         html += "</div>";
       }
+
+      html += '<button class="copy-btn" onclick="copyChatGptPrompt(currentPacket)">ChatGPT用プロンプトをコピー</button>';
+      html += '<div id="copyNote" class="copy-note"></div>';
 
       html += '<button class="generate-btn" disabled>マンガ生成(準備中)</button>';
       html += '<div class="generate-note">RunPod接続はまだ実装されていません(Phase 3以降)</div>';

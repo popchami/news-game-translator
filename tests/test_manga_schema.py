@@ -316,5 +316,138 @@ class IsValidIso8601Test(unittest.TestCase):
                 self.assertFalse(ms.is_valid_iso8601(value))
 
 
+class ReferenceImagesTest(unittest.TestCase):
+    """panels[].reference_image(単数・既存)とreference_images(複数・新規)の
+    排他ハンドリングを検証する(docs/manga-pipeline.md ChatGPTルート対応)。
+    """
+
+    def test_legacy_single_reference_image_still_passes(self):
+        # 既存Packetとの後方互換の回帰確認。
+        panel = make_panel(1)
+        self.assertEqual(ms.validate_panel(panel, 0), [])
+
+    def test_missing_both_forms_rejected(self):
+        panel = make_panel(1)
+        del panel["reference_image"]
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("reference_image" in r for r in reasons))
+
+    def test_empty_single_reference_image_rejected(self):
+        panel = make_panel(1, reference_image="")
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("reference_image" in r for r in reasons))
+
+    def test_multi_reference_images_passes(self):
+        panel = make_panel(1)
+        del panel["reference_image"]
+        panel["reference_images"] = {
+            "ハルト": "haruto/surprise-medium.png",
+            "ナツキ": "natsuki/neutral.png",
+        }
+        self.assertEqual(ms.validate_panel(panel, 0), [])
+
+    def test_both_single_and_multi_specified_rejected(self):
+        panel = make_panel(1)
+        panel["reference_images"] = {"ハルト": "haruto/surprise-medium.png"}
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(
+            any("reference_imageとreference_imagesを同時に指定できません" in r for r in reasons)
+        )
+
+    def test_empty_reference_images_dict_rejected(self):
+        panel = make_panel(1)
+        del panel["reference_image"]
+        panel["reference_images"] = {}
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("reference_images" in r for r in reasons))
+
+    def test_non_dict_reference_images_rejected(self):
+        panel = make_panel(1)
+        del panel["reference_image"]
+        panel["reference_images"] = "haruto/surprise-medium.png"
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("reference_images" in r for r in reasons))
+
+    def test_reference_images_disallowed_character_name_rejected(self):
+        panel = make_panel(1)
+        del panel["reference_image"]
+        panel["reference_images"] = {"宰相タカイチ": "x.png"}
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("許可されていないキャラクター名" in r for r in reasons))
+
+    def test_reference_images_all_five_allowed_names_individually_valid(self):
+        for name in ms.ALLOWED_CHARACTERS:
+            with self.subTest(name=name):
+                panel = make_panel(1)
+                del panel["reference_image"]
+                panel["reference_images"] = {name: "x/y.png"}
+                self.assertEqual(ms.validate_panel(panel, 0), [])
+
+    def test_reference_images_empty_filename_value_rejected(self):
+        panel = make_panel(1)
+        del panel["reference_image"]
+        panel["reference_images"] = {"ハルト": ""}
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("reference_images['ハルト']" in r for r in reasons))
+
+    def test_reference_images_non_string_filename_value_rejected(self):
+        panel = make_panel(1)
+        del panel["reference_image"]
+        panel["reference_images"] = {"ハルト": 123}
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("reference_images['ハルト']" in r for r in reasons))
+
+
+class PanelRoleTest(unittest.TestCase):
+    """panels[].role(任意フィールド)を検証する。"""
+
+    def test_role_absent_still_passes(self):
+        panel = make_panel(1)
+        self.assertEqual(ms.validate_panel(panel, 0), [])
+
+    def test_role_non_empty_string_passes(self):
+        panel = make_panel(1, role="introduction")
+        self.assertEqual(ms.validate_panel(panel, 0), [])
+
+    def test_role_empty_string_rejected(self):
+        panel = make_panel(1, role="")
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("role" in r for r in reasons))
+
+    def test_role_non_string_rejected(self):
+        panel = make_panel(1, role=123)
+        reasons = ms.validate_panel(panel, 0)
+        self.assertTrue(any("role" in r for r in reasons))
+
+
+class SourceOptionalFieldsTest(unittest.TestCase):
+    """source.decided/not_decided/next_step(任意フィールド)を検証する。"""
+
+    def test_absent_optional_fields_still_pass(self):
+        source = make_packet()["source"]
+        self.assertEqual(ms.validate_source(source), [])
+
+    def test_present_string_values_pass(self):
+        source = make_packet()["source"]
+        source["decided"] = "シュウギ院を通過した"
+        source["not_decided"] = "サンギ院での審議結果"
+        source["next_step"] = "サンギ院での審議"
+        self.assertEqual(ms.validate_source(source), [])
+
+    def test_present_empty_string_values_pass(self):
+        # 該当情報がない項目を無理に埋める必要はないため、空文字列も許容する。
+        source = make_packet()["source"]
+        source["decided"] = ""
+        self.assertEqual(ms.validate_source(source), [])
+
+    def test_present_non_string_value_rejected(self):
+        for field in ms.OPTIONAL_SOURCE_STR_FIELDS:
+            with self.subTest(field=field):
+                source = make_packet()["source"]
+                source[field] = 123
+                reasons = ms.validate_source(source)
+                self.assertTrue(any(field in r for r in reasons))
+
+
 if __name__ == "__main__":
     unittest.main()

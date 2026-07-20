@@ -1,0 +1,73 @@
+{
+  "packet_version": 1,
+  "created_at": "2026-07-20T09:00:00+09:00",
+  "source": {
+    "title": "「副首都」構想法案 衆議院を通過、会期末の成立は不透明",
+    "url": "http://www3.nhk.or.jp/news/html/20260715/k10015177671000.html",
+    "summary": "大規模災害時の首都代替機能を担う「副首都」構想の関連法案が衆議院本会議で可決され、参議院に送られた。会期末は17日で、これに間に合うかは不透明。与党は会期末の成立を目指す一方、会期延長も検討している。",
+    "decided": "衆議院本会議で可決され、参議院へ送られた",
+    "not_decided": "会期末(7月17日)までに参議院で成立するかどうか",
+    "next_step": "参議院での審議"
+  },
+  "isekai_text": "中央評議会で、災厄に備え第二の都を築く「副首都」の国法がシュウギ院を通過した。残る審査はサンギ院のみ。会期末までに越えられるかは、まだ誰にも分からない。",
+  "scribe_note": "大規模災害時に首都機能を代替する「副首都」構想の関連法案は、2026年7月15日に衆議院本会議で可決され参議院へ送られた。会期末は同月17日で、これに間に合うかは不透明である。与党は会期末までの成立を目指す一方、会期延長も検討されている。",
+  "characters": ["ハルト", "ナツキ", "書記官"],
+  "panels": [
+    {
+      "panel_no": 1,
+      "role": "introduction",
+      "scene": "中央公示ギルドの掲示板前で、ハルトが新しい掲示に気づき指差す。隣でナツキも掲示を覗き込む",
+      "dialogue": "ハルト「おい見ろよ、これ!『第二の都』計画、シュウギ院を通過したってさ」",
+      "expression": "surprise-medium",
+      "background": "掲示板前の広場、賑わう街並み",
+      "image_prompt": "young male adventurer Haruto pointing excitedly at a guild bulletin board, young female adventurer Natsuki peeking at the notice beside him, medieval fantasy guild plaza background, surprised expression, anime style",
+      "reference_images": {
+        "ハルト": "haruto/surprise-medium.png",
+        "ナツキ": "natsuki/neutral.png"
+      }
+    },
+    {
+      "panel_no": 2,
+      "role": "question",
+      "scene": "ハルトが掲示のアップを見て困惑した顔でナツキを見る",
+      "dialogue": "ハルト「え、そんなことのために新しい都を作るのか?」",
+      "expression": "confusion-medium",
+      "background": "掲示板の文字が見える近景",
+      "image_prompt": "Haruto looking confused and curious at a bulletin notice, close-up guild board background, anime style",
+      "reference_images": {
+        "ハルト": "haruto/confusion-medium.png",
+        "ナツキ": "natsuki/neutral.png"
+      }
+    },
+    {
+      "panel_no": 3,
+      "role": "explanation",
+      "scene": "ナツキが腕組みし、掲示の隅の日付を指しながら落ち着いて補足する",
+      "dialogue": "ナツキ「災害用の予備、ってことでしょうね。シュウギ院は通した。だけど会期末はもう目の前。サンギ院が間に合うかは、まだ誰にも分からない」",
+      "expression": "neutral",
+      "background": "掲示板前、少し離れた位置",
+      "image_prompt": "young female adventurer Natsuki with arms crossed, calm composed expression, pointing at a date on a notice board, anime style",
+      "reference_images": {
+        "ハルト": "haruto/confusion-medium.png",
+        "ナツキ": "natsuki/neutral.png"
+      }
+    },
+    {
+      "panel_no": 4,
+      "role": "current_status",
+      "scene": "ハルトとナツキが向き合い、今分かっていることと、まだ分からないことを確認し合う",
+      "dialogue": "ハルト「つまり、シュウギ院は通った、と」 ナツキ「ええ。ただしサンギ院はこれから。会期末までに終わるかは、まだ分からないわ」",
+      "expression": "speaking-normal",
+      "background": "掲示板前の広場、夕方",
+      "image_prompt": "Haruto and Natsuki facing each other in conversation near the guild bulletin board, thoughtful and composed expressions, medieval fantasy plaza background at dusk, anime style",
+      "reference_images": {
+        "ハルト": "haruto/speaking-normal.png",
+        "ナツキ": "natsuki/speaking-normal.png"
+      }
+    }
+  ],
+  "cautions": [
+    "元記事2件のうち、副首都に関する会期末言及部分のみ使用した(皇室典範改正案に関する部分は今回不使用)",
+    "会期末までに成立するかどうかは断定せず、未確定表現を維持した"
+  ]
+}

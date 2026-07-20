@@ -39,12 +39,14 @@ X投稿用の4コママンガの脚本(Manga News Packet)として構成する�
 
 - **ハルト**: 明るい、フランク、疑問形が多い。読者の「最初の疑問」を代弁する
 - **ナツキ**: 落ち着いている、時々皮肉っぽい合いの手。物事の仕組みや裏側が気になる
-- **アキラ**: 短文、断定的、少し皮肉。感情に流されず要点を整理する
-- **フユミ**: ゆったり、間延びした喋り方。たまに核心を突く天然発言
 - **書記官**: 敬語、断定を避ける(「〜とされている」等)。感情を代弁せず、
   皮肉を言わない、一人称を原則使わない
 
-1話の登場は、この5人から最大3人を選ぶ(全員を毎回登場させない)。
+第1〜4コマ(panels)はハルト・ナツキの2人固定とする。書記官は第5コマ
+(scribe_note)専任であり、panelsには登場させない(2026-07-20改訂。
+docs/worldbook.mdの「X用5コマ構成」節参照)。アキラ・フユミは、この
+脚本タイプでは登場させない(スキーマ上は`characters`に含めることが
+可能だが、本手順では使わない)。
 
 ## 手順
 
@@ -52,67 +54,76 @@ X投稿用の4コママンガの脚本(Manga News Packet)として構成する�
 2. 指定されたJSONファイル(記事リスト、prompts/translate.mdと同じ入力
    スキーマ)を読む
 3. 各記事について:
-   a. title と summary(sourceTypeがworkの場合はconfirmedFacts等も)の
-      事実だけを中立に把握する(内部作業。prompts/translate.mdの手順3aと
-      同じ考え方)
-   b. 登場させるキャラクターを、この記事の題材に合わせて5人から
-      最大3人選ぶ
-   c. 4コマの構成を作る(下記「4コマの型」参照)
-   d. 各コマのセリフ・場面・表情タグ・背景・画像生成プロンプト
-      (英語)を作る
-4. 全記事分を、scripts/manga_schema.py の validate_packet が通る
+   a. title と summary(sourceTypeがworkの場合はconfirmedFacts・status・
+      remainingProcess等も)の事実だけを中立に把握する(内部作業。
+      prompts/translate.mdの手順3aと同じ考え方)。決定済み事項・未決定
+      事項・今後の手続きが記事から判別できる場合は、`source.decided`・
+      `source.not_decided`・`source.next_step`として整理しておく
+      (任意フィールド。該当情報がなければ無理に埋めない)
+   b. 4コマの構成を作る(下記「4コマの型」参照)。登場キャラクターは
+      ハルト・ナツキで固定(選択の余地はない)
+   c. 各コマのセリフ・場面・表情タグ・背景・画像生成プロンプト
+      (英語)・参照画像(`reference_images`)を作る
+4. 全記事分を、scripts/manga_schema.py の validate_packet と
+   scripts/validate_manga.py の validate_chatgpt_route が両方通る
    JSON(Manga News Packet)のみを出力先ファイルへ書き出す
 
-## 4コマの型
+## 4コマの型(確定)
 
-X用4コマ版は以下を基本形とする(docs/worldbook.mdの「X用4コマ版」節
-準拠)。厳密にこの順序でなければならないわけではないが、特別な理由が
-ない限りこの型に従う。
+第1〜4コマ(panels)は以下を基本形とする(docs/worldbook.mdの
+「X用5コマ構成」節準拠)。厳密にこの順序でなければならないわけではないが、
+特別な理由がない限りこの型に従う。書記官はこの4コマのいずれにも登場しない。
 
-1. **出来事の提示**: 記事の中心となる出来事を、登場キャラクターが
-   目にする/知る場面
-2. **キャラの疑問**: 1人目のキャラクターが疑問や第一印象を口にする
-3. **別キャラの補足または展開**: 別のキャラクターが仕組みや背景を補足する、
-   または話が展開する
-4. **書記官の解説**: 書記官が現実のニュースとの対応・争点・未確定事項を
-   短く述べる専用コマ
+1. **導入**: 記事の中心となる出来事を、ハルトとナツキが目にする/知る場面
+2. **ハルトの疑問**: ハルトが疑問や第一印象を口にする
+3. **ナツキの整理**: ナツキが仕組みや背景を落ち着いて整理する。記事にない
+   裏事情を推測しない
+4. **現在地の確認**: 決定済み事項・未決定事項・今後の手続き、またはこの
+   ニュースが暮らしにどう関係するかを、ハルトとナツキの掛け合いで示す。
+   ここから第5コマ(書記官の解説)へつなげる
 
-書記官が1〜3のいずれかに既に登場している場合でも、4コマ目の解説コマは
-書記官が担当する。
+現実のニュースとの対応・争点・未確定事項の詳細な説明は、4コマ目に
+詰め込まず、第5コマ(`scribe_note`)で書記官が行う。
 
 ## 事実保持(prompts/translate.mdと共通の考え方)
 
 4コマという短い制約の中でも、法律・制度の対象範囲・要件・例外・行為類型を
 元記事より広く、または狭く読める表現へ一般化してはならない
 (prompts/translate.mdの「法律・制度の内容を短縮する際の注意」と同じ
-考え方)。正確な短縮が難しい詳細は、無理にセリフへ詰め込まず、書記官の
-解説コマ(4コマ目)またはscribe_noteフィールドで補う。
+考え方)。正確な短縮が難しい詳細は、無理にセリフへ詰め込まず、第5コマの
+`scribe_note`フィールドで補う。
 
 sourceDifferences(情報源間の食い違い)がある場合は、cautionsフィールドへ
 記録する。
 
 ## 出力(Manga News Packet)
 
-出力はJSONのみとし、scripts/manga_schema.py の validate_packet が通る
-構造にする。フィールドの詳細は同ファイルを参照。
+出力はJSONのみとし、scripts/manga_schema.py の validate_packet と
+scripts/validate_manga.py の validate_chatgpt_route が両方通る構造にする。
+フィールドの詳細は両ファイルを参照。
 
 必須フィールド:
 
 - `packet_version`: 1(固定)
 - `created_at`: ISO 8601形式の日時
-- `source`: 元記事情報(`title`・`url`・`summary`。summaryは中立要約)
+- `source`: 元記事情報(`title`・`url`・`summary`は必須。summaryは中立要約。
+  `decided`・`not_decided`・`next_step`は任意で、判明していれば記載する)
 - `isekai_text`: 異世界ニホン版の短い本文(マンガ全体の要約に相当)
-- `scribe_note`: 書記官の解説(現実ニュースとの対応・争点・未確定事項)
-- `characters`: 登場キャラクター名の配列(manga/characters.mdの5人から
-  最大3人)
-- `panels`: 必ず4要素。各要素は `panel_no`(1〜4の連番)・`scene`(場面
-  説明)・`dialogue`(話者名+セリフ)・`expression`(表情タグ)・
-  `background`(背景の短い説明)・`image_prompt`(英語の画像生成用
-  プロンプト)・`reference_image`(参照画像ファイル名)を持つ
+- `scribe_note`: 書記官の解説(現実ニュースとの対応・争点・未確定事項)。
+  第5コマに相当する
+- `characters`: `["ハルト", "ナツキ", "書記官"]`固定
+- `panels`: 必ず4要素、いずれもハルト・ナツキのみが登場する。各要素は
+  `panel_no`(1〜4の連番)・`scene`(場面説明)・`dialogue`(話者名+
+  セリフ)・`expression`(表情タグ)・`background`(背景の短い説明)・
+  `image_prompt`(英語の画像生成用プロンプト)・`reference_images`
+  (登場キャラクター名→参照画像ファイル名の対応。例:
+  `{"ハルト": "haruto/surprise-medium.png", "ナツキ": "natsuki/neutral.png"}`)
+  を持つ。`role`(コマの役割。`introduction`/`question`/`explanation`/
+  `current_status`)は任意だが、付与を推奨する
 - `cautions`: 事実保持の注意事項(独自訳・sourceDifferences・断定を
   避けた表現等)の配列。特になければ空配列
 
-表情タグ(`expression`)は、ハルト表情セットの実ファイル名体系
+表情タグ(`expression`)は、ハルト・ナツキの表情セットの実ファイル名体系
 (チャミによる実物検証済み、確定)に合わせ、次のいずれかを使う:
 
 - `neutral`(強度指定なし)
@@ -125,13 +136,20 @@ sourceDifferences(情報源間の食い違い)がある場合は、cautionsフ�
 
 `image_prompt`(英語プロンプト)の感情表現は、同じコマの`expression`タグと
 整合させること(例: `expression`が`surprise-medium`なら、`image_prompt`に
-`joyful`のような別の感情語を混在させない)。
+`joyful`のような別の感情語を混在させない)。1コマにハルト・ナツキ両方が
+登場する場合、`expression`はそのコマで主体となる側の表情タグとする。
 
-`reference_image`は、対応キャラクターの表情タグに沿ったファイル名を
-記載する(実際のファイルがまだ存在しない場合でも、意図する名称を
-記載してよい。前提条件はdocs/manga-pipeline.md参照)。
+`reference_images`のキーはキャラクター名(`ハルト`/`ナツキ`)、値は対応する
+参照画像の論理ID(`<character>/<tag>.png`形式。例: `haruto/neutral.png`。
+実体はcomfyui-mobile-system側のGitHub Release資産。前提条件は
+docs/manga-pipeline.md参照)。実際のファイルがまだ手元にない場合でも、
+意図する論理IDを記載してよい。
 
 ## 出力フォーマット例
 
-data/state/manga_packet.example.json を参照(episode01.mdの11コマ構成を
-4コマへ圧縮した例。事実は変えていない)。
+- 旧形式(reference_image単数、4コマ目が書記官のケース)の参考例:
+  data/state/manga_packet.example.json(episode01.mdの11コマ構成を
+  4コマへ圧縮した例。事実は変えていない。**この例は本手順の改訂前の
+  形式であり、新規作成時の型としては使わないこと**)
+- 新形式(本手順の型、reference_images複数形・ハルト/ナツキ固定)の例:
+  data/state/manga_packet.chatgpt_route.example.json
