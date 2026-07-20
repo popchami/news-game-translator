@@ -299,9 +299,16 @@ Manga News Packet(JSON)とアプリのHTML/静的アセットを同一オリジ�
 
 ## 前提条件・未解決事項
 
-- **キャラクター参照画像はハルトのみ完成**(ChatGPT製)。アキラ・書記官の参照画像は
-  未完成であり、Phase 1時点では作成しない(manga/characters.mdの必要な設定画一覧
-  参照)。ナツキ・フユミは現時点で未登場のため優先度は更に低い
+- **キャラクター参照画像はハルト・ナツキが完成済み**(2026-07-20更新)。
+  comfyui-mobile-system側で、両キャラクターとも表情31種・4方向立ち絵
+  (turnaround)4種がGitHub Release資産として登録・実URL取得検証済み。
+  ナツキはさらに装備・紋(equipment)2種も完成済み(旧記載「ハルトのみ完成」
+  「ナツキは現時点で未登場のため優先度は更に低い」は誤り、更新した)。
+  実体は別リポジトリ側(`profiles/sdxl/isekai_nihon_manga/reference_images/
+  {haruto,natsuki}/`、Release: `haruto-expression-set-v2`・
+  `haruto-turnaround-v1`・`natsuki-complete-set-v2`)。アキラ・フユミ・
+  書記官の参照画像は未完成であり、現時点では作成しない
+  (manga/characters.mdの必要な設定画一覧参照)
 - **画風統一の方式は未検証**。SDXL + IPAdapterによるスタイル転写(ハルトの
   ChatGPT製参照画像を基準に、SDXLで生成する他キャラ・背景の画風を揃える)を
   パイロット生成で検証する予定。検証はPhase 4(1コマ生成)着手時に行う
@@ -504,3 +511,4 @@ python3 scripts/serve_inbox.py
 | v0.4 | 2026-07-19 | チャミ決定により「4コマ版」を「5コマ構成(起承転結4コマ+解説コマ)」に改称。第5コマ(解説コマ)の仕様を確定(事前生成した書記官解説カットストックから選択+scribe_noteテキスト合成。毎回生成方式への将来のb昇格も想定した設計)として明記。Phase 2調査項目に「書記官の解説カットストックの作成」「第5コマの毎回生成化の検証」を追加。scripts/manga_schema.pyのpanels=4固定(画像生成対象)は変更なし |
 | v0.5 | 2026-07-19 | Phase 1・ステップ3(受信アプリ)を実装。app/isekai_inbox.html(NGT側受信アプリ、画像生成なし版)、scripts/serve_inbox.py(ローカルHTTPサーバー)を追加。動作確認手順を末尾に追記 |
 | v0.6 | 2026-07-19 | Phase 2調査項目「キャラ固定方式」にLoRA検討メモ(未確定)を追加。LoRAを作ると決めた場合の優先順位(キャラクターLoRA>表情LoRA、スタイルLoRAは保留、ポーズLoRAは作成しない)と学習画像の目安を記録。キャラ固定方式の確定自体はIPAdapterパイロット生成の結果待ちのままで変更なし |
+| v0.7 | 2026-07-20 | ChatGPT漫画生成ルート整備(`feature/chatgpt-manga-route`)に伴い「前提条件・未解決事項」の記載を更新。「キャラクター参照画像はハルトのみ完成」という古い前提を、ハルト・ナツキとも表情・4方向立ち絵まで完成済み(ナツキはさらに装備・紋も完成済み)であるという実際の状態に修正。あわせて、panels(第1〜4コマ)がハルト・ナツキ専任・書記官はscribe_note専任という新しい4コマの型(docs/worldbook.md参照)、および参照画像の複数形化(`reference_images`)を反映 |
