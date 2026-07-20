@@ -263,6 +263,34 @@ class CliTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
 
+    def test_missing_packet_file_reports_clear_error_not_traceback(self):
+        # セルフレビューで発見: 修正前は open() の FileNotFoundError が
+        # そのままPythonトレースバックとして出力されていた。
+        result = self._run(
+            str(self.dest_dir),
+            "--packet",
+            str(pathlib.Path(self._tmpdir.name) / "does-not-exist.json"),
+            "--comfyui-root",
+            str(self.comfyui_root),
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("[ERROR]", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_invalid_json_packet_file_reports_clear_error_not_traceback(self):
+        packet_path = pathlib.Path(self._tmpdir.name) / "broken.json"
+        packet_path.write_text("{not valid json", encoding="utf-8")
+        result = self._run(
+            str(self.dest_dir),
+            "--packet",
+            str(packet_path),
+            "--comfyui-root",
+            str(self.comfyui_root),
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("[ERROR]", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

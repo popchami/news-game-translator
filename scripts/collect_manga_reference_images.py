@@ -116,8 +116,9 @@ def resolve_source_path(comfyui_root, reference_image):
     if not manifest_path.is_file():
         raise CollectError(
             f"manifest.jsonが見つかりません: {manifest_path}"
-            "(comfyui-mobile-system側でscripts/fetch_reference_images.pyを"
-            f"実行済みか確認してください。--character {character})"
+            "(comfyui-mobile-system側で"
+            f"`python3 scripts/fetch_reference_images.py --character {character}` "
+            "を実行済みか確認してください)"
         )
     with manifest_path.open(encoding="utf-8") as f:
         manifest = json.load(f)
@@ -134,8 +135,9 @@ def resolve_source_path(comfyui_root, reference_image):
     if not image_path.is_file():
         raise CollectError(
             f"参照画像の実ファイルが存在しません: {image_path}"
-            "(comfyui-mobile-system側でscripts/fetch_reference_images.pyを"
-            f"実行済みか確認してください。--character {character})"
+            "(comfyui-mobile-system側で"
+            f"`python3 scripts/fetch_reference_images.py --character {character}` "
+            "を実行済みか確認してください)"
         )
     return image_path
 
@@ -219,8 +221,15 @@ def main():
     args = parser.parse_args()
 
     if args.packet:
-        with open(args.packet, encoding="utf-8") as f:
-            packet = json.load(f)
+        try:
+            with open(args.packet, encoding="utf-8") as f:
+                packet = json.load(f)
+        except OSError as e:
+            print(f"[ERROR] Packetファイルを読み込めません: {args.packet}({e})", file=sys.stderr)
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] PacketファイルのJSONが不正です: {args.packet}({e})", file=sys.stderr)
+            sys.exit(1)
         reference_images = extract_reference_images_from_packet(packet)
         if not reference_images:
             print("[ERROR] Packetに参照画像(reference_image/reference_images)が見つかりません", file=sys.stderr)
