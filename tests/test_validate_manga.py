@@ -324,6 +324,41 @@ class ChatGptRouteValidationTest(unittest.TestCase):
         self.assertTrue(vm.validate_chatgpt_route(packet))
 
 
+class ChatGptRouteExampleFileTest(unittest.TestCase):
+    """data/state/manga_packet.chatgpt_route.example.json が、構造検証・
+    ChatGPTルート追加検証・禁止語検証のすべてに合格することを確認する。
+    """
+
+    def _load(self):
+        example_path = ROOT / "data" / "state" / "manga_packet.chatgpt_route.example.json"
+        with example_path.open(encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_passes_generic_structural_validation(self):
+        packet = self._load()
+        self.assertEqual(manga_schema.validate_packet(packet), [])
+
+    def test_passes_chatgpt_route_validation(self):
+        packet = self._load()
+        self.assertEqual(vm.validate_chatgpt_route(packet), [])
+
+    def test_passes_full_validate_manga_packet(self):
+        # 禁止語検証(scripts/banned_terms.py)も含めて合格することを確認する。
+        packet = self._load()
+        self.assertEqual(vm.validate_manga_packet(packet), [])
+
+    def test_legacy_example_file_does_not_pass_chatgpt_route_validation(self):
+        # 旧形式サンプル(data/state/manga_packet.example.json)は、
+        # 構造検証には合格し続けるが、ChatGPTルート追加検証には合格しない
+        # (4コマ目が書記官であるため)。新旧の使い分けが機能していることの
+        # 回帰確認。
+        legacy_path = ROOT / "data" / "state" / "manga_packet.example.json"
+        with legacy_path.open(encoding="utf-8") as f:
+            legacy_packet = json.load(f)
+        self.assertEqual(manga_schema.validate_packet(legacy_packet), [])
+        self.assertTrue(vm.validate_chatgpt_route(legacy_packet))
+
+
 class CliSourceJsonArgumentTest(unittest.TestCase):
     """CLI(validate_manga.py <packet_file> [<source_json>])が、
     第2引数の元記事JSONを正しく照合対象に取り込むことを確認する。
