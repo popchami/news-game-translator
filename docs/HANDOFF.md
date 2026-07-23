@@ -5,10 +5,12 @@
 参照すること(このファイル自体は要約のみを保持する)。
 
 最終更新: 2026-07-24(Manga News Packet v2への全面移行・正本テンプレート
-仕様確定。feature branch `manga-packet-v2`上で実装・分割Codexレビュー
-A〜D完了、Blocker/Critical/Major/Minor残件0、テスト350件全合格、
-comfyui-mobile-system側との接続契約18項目すべてMATCH確認済み。
-**mainにはまだ未反映**(merge・Release未実施)。次はDraft PRの確認待ち
+仕様確定。実装ブランチ`manga-packet-v2`・実装commit`6adc935d00d8155f30f0c2602c623e994725aa09`・
+PR #15(https://github.com/popchami/news-game-translator/pull/15)。
+分割CodexレビューA/B/D完了、レビュー時点でBlocker/Critical/Major/Minor
+残件0、レビュー時点で350件全合格、comfyui-mobile-system側との接続契約
+18項目すべてMATCH確認済み。**最新のマージ状態はGitHub PR #15と
+git履歴を正とする**
 
 ---
 
@@ -114,13 +116,18 @@ RunPod+ComfyUIの自動生成ルート(Phase 2以降)とは別に、ChatGPTの�
   コミット`776a00c`)。**mainへのマージ前に、Codex利用再開後の正式レビュー
   実施を検討の余地あり**
 
-### Manga News Packet v2への全面移行(2026-07-23〜24、feature branch上で実装・レビュー完了・mainへ未反映)
+### Manga News Packet v2への全面移行(2026-07-23〜24、実装ブランチ`manga-packet-v2`・PR #15)
 
 チャミが提示した正本の5コマテンプレート仕様(1080×1920px、5コマの座標・
 枠線6px・コマ間隔19px。comfyui-mobile-system側に数値正本を配置)確定に
-伴い、Manga News PacketをPACKET_VERSION 2へ全面移行した。ブランチ
-`manga-packet-v2`(mainから分岐)上で実装・Codexレビュー・修正まで完了。
-**mainへのマージ・Release作成は未実施、チャミの確認待ち。**
+伴い、Manga News PacketをPACKET_VERSION 2へ全面移行した。
+
+- **実装ブランチ**: `manga-packet-v2`(mainから分岐)
+- **実装commit**: `6adc935d00d8155f30f0c2602c623e994725aa09`
+- **PR**: #15(https://github.com/popchami/news-game-translator/pull/15)
+- **最新のマージ状態はGitHub PR #15とgit履歴を正とする**(このファイルの
+  記載は実装時点のスナップショットであり、マージ・Release状況を都度
+  上書きする運用はしない)
 
 - **分割Codexレビュー完了**(2026-07-24): 差分を4分割してレビュー
   (A: Packet v2中核スキーマ/検証、B: NGT連携・UI・文書、C: comfyui-
@@ -231,9 +238,8 @@ ChatGPTルートとは別に、Gemini APIを直接呼び出して人手を介さ
 
 ## 次
 
-1. **チャミへdiff一式を提示し、`manga-packet-v2`ブランチのmainマージ
-   承認を得る**(直近の作業。push・PR作成・マージ・Release作成は今回の
-   作業範囲外、明示的な指示があるまで実施しない)
+1. **PR #15(https://github.com/popchami/news-game-translator/pull/15)の
+   マージ判断**。最新状態はGitHub PRとgit履歴を参照すること
 2. **Gemini API自動化ルート**: 調査結果(ブランチ戦略・SDK/REST方式・
    APIキー管理方針)についてチャミの承認を得てから、
    `feature/gemini-api-manga-route`で実装着手
