@@ -1,55 +1,165 @@
 {
-  "packet_version": 1,
-  "created_at": "2026-07-19T09:00:00+09:00",
+  "packet_version": 2,
+  "created_at": "2026-07-23T09:00:00+09:00",
   "source": {
-    "title": "「副首都」構想法案 衆議院を通過、会期末の成立は不透明",
-    "url": "http://www3.nhk.or.jp/news/html/20260715/k10015177671000.html",
-    "summary": "大規模災害時の首都代替機能を担う「副首都」構想の関連法案が衆議院本会議で可決され、参議院に送られた。会期末は17日で、これに間に合うかは不透明。与党は会期末の成立を目指す一方、会期延長も検討している。"
+    "title": "「副首都」構想法案 衆議院を通過",
+    "url": "https://example.com/articles/1",
+    "summary": "大規模災害時の首都代替機能を担う法案が衆議院を通過した。",
+    "decided": "シュウギ院を通過した",
+    "not_decided": "サンギ院での審議結果",
+    "next_step": "サンギ院での審議"
   },
-  "isekai_text": "中央評議会で、災厄に備え第二の都を築く「副首都」の国法がシュウギ院を通過した。残る審査はサンギ院のみ。会期末までに越えられるかは、まだ誰にも分からない。",
-  "scribe_note": "大規模災害時に首都機能を代替する「副首都」構想の関連法案は、2026年7月15日に衆議院本会議で可決され参議院へ送られた。会期末は同月17日で、これに間に合うかは不透明である。与党は会期末までの成立を目指す一方、会期延長も検討されている。",
-  "characters": ["ハルト", "アキラ", "書記官"],
+  "isekai_text": "中央評議会で「副首都」の国法がシュウギ院を通過した。",
+  "scribe_note": "副首都構想の関連法案が\n衆議院本会議で可決された。\n参議院での審議は\nこれから行われる。",
+  "characters": [
+    "ハルト",
+    "ナツキ",
+    "書記官"
+  ],
   "panels": [
     {
       "panel_no": 1,
-      "scene": "中央公示ギルドの掲示板前で、ハルトが新しい掲示に気づき指差す",
-      "dialogue": "ハルト「おい見ろよ、これ!『第二の都』計画、シュウギ院を通過したってさ」",
-      "expression": "surprise-medium",
-      "background": "掲示板前の広場、賑わう街並み",
-      "image_prompt": "young male adventurer Haruto pointing excitedly at a guild bulletin board, medieval fantasy guild plaza background, surprised expression, anime style",
-      "reference_image": "haruto/surprise-medium.png"
+      "role": "setup",
+      "scene": "掲示板前でハルトとナツキが新しい公示に気づく",
+      "background": "冒険者ギルドの掲示板前",
+      "framing": "waist",
+      "camera_angle": "eye_level",
+      "image_prompt": "two young adventurers noticing a new notice on a guild bulletin board, anime style",
+      "negative_prompt": "text, speech bubble, japanese characters, onomatopoeia, panel border",
+      "performers": [
+        {
+          "name": "ハルト",
+          "position": "left",
+          "facing": "three_quarter_right",
+          "gaze": "object",
+          "expression": "surprise-weak",
+          "reference_image": "haruto/surprise-weak.png"
+        },
+        {
+          "name": "ナツキ",
+          "position": "right",
+          "facing": "three_quarter_left",
+          "gaze": "object",
+          "expression": "neutral",
+          "reference_image": "natsuki/neutral.png"
+        }
+      ],
+      "dialogues": [
+        {
+          "speaker": "ハルト",
+          "text": "おい見ろよ、これ",
+          "bubble_position": "upper_left"
+        }
+      ]
     },
     {
       "panel_no": 2,
-      "scene": "ハルトが掲示のアップを見て驚いた顔でアキラを見る",
-      "dialogue": "ハルト「え、そんなことのために新しい都を作るのか?」",
-      "expression": "confusion-medium",
-      "background": "掲示板の文字が見える近景",
-      "image_prompt": "Haruto looking confused and curious at a bulletin notice, close-up guild board background, anime style",
-      "reference_image": "haruto/confusion-medium.png"
+      "role": "development",
+      "scene": "ハルトが掲示の内容に驚き疑問を口にする",
+      "background": "冒険者ギルドの掲示板前",
+      "framing": "bust",
+      "camera_angle": "eye_level",
+      "image_prompt": "young man looking puzzled at a notice board, close bust shot, anime style",
+      "negative_prompt": "text, speech bubble, japanese characters, onomatopoeia, panel border",
+      "performers": [
+        {
+          "name": "ハルト",
+          "position": "center",
+          "facing": "front",
+          "gaze": "reader",
+          "expression": "confusion-medium",
+          "reference_image": "haruto/confusion-medium.png"
+        }
+      ],
+      "dialogues": [
+        {
+          "speaker": "ハルト",
+          "text": "なんで急に決まったんだ",
+          "bubble_position": "upper_center"
+        }
+      ]
     },
     {
       "panel_no": 3,
-      "scene": "アキラが腕組みし、掲示の隅の日付を指しながら補足する",
-      "dialogue": "アキラ「災害用の予備、ってことだろ。シュウギ院は通した。だが会期末はもう目の前だ。サンギ院が間に合うかは、まだ誰にも分からない」",
-      "expression": "neutral",
-      "background": "掲示板前、少し離れた位置",
-      "image_prompt": "young male adventurer Akira with arms crossed, calm serious expression, pointing at a date on a notice board, anime style",
-      "reference_image": "akira/neutral.png"
+      "role": "turn",
+      "scene": "ナツキが落ち着いて仕組みを整理する",
+      "background": "冒険者ギルドの掲示板前",
+      "framing": "close_up",
+      "camera_angle": "low_angle",
+      "image_prompt": "calm young woman explaining something, close up on face, anime style",
+      "negative_prompt": "text, speech bubble, japanese characters, onomatopoeia, panel border",
+      "performers": [
+        {
+          "name": "ナツキ",
+          "position": "right",
+          "facing": "three_quarter_left",
+          "gaze": "other_character",
+          "expression": "determination-weak",
+          "reference_image": "natsuki/determination-weak.png"
+        },
+        {
+          "name": "ハルト",
+          "position": "left",
+          "facing": "three_quarter_right",
+          "gaze": "other_character",
+          "expression": "neutral",
+          "reference_image": "haruto/neutral.png"
+        }
+      ],
+      "dialogues": [
+        {
+          "speaker": "ナツキ",
+          "text": "前から準備してたみたい",
+          "bubble_position": "upper_right"
+        },
+        {
+          "speaker": "ハルト",
+          "text": "そうなのか",
+          "bubble_position": "upper_left"
+        }
+      ]
     },
     {
       "panel_no": 4,
-      "scene": "書記官が掲示板の奥で静かに佇み、記録を読み上げる",
-      "dialogue": "書記官「——この件について、記録を残す」",
-      "expression": "speaking-normal",
-      "background": "掲示板の奥、静かな執務スペース",
-      "image_prompt": "female scribe character standing calmly in a quiet guild archive corner, holding a scroll, composed expression, anime style",
-      "reference_image": "scribe/speaking-normal.png"
+      "role": "resolution",
+      "scene": "二人が今後の手続きを確認し合う",
+      "background": "冒険者ギルドの掲示板前",
+      "framing": "wide",
+      "camera_angle": "eye_level",
+      "image_prompt": "two adventurers standing together in front of a guild hall, wide shot, anime style",
+      "negative_prompt": "text, speech bubble, japanese characters, onomatopoeia, panel border",
+      "performers": [
+        {
+          "name": "ハルト",
+          "position": "left",
+          "facing": "three_quarter_right",
+          "gaze": "other_character",
+          "expression": "determination-medium",
+          "reference_image": "haruto/determination-medium.png"
+        },
+        {
+          "name": "ナツキ",
+          "position": "right",
+          "facing": "three_quarter_left",
+          "gaze": "other_character",
+          "expression": "neutral",
+          "reference_image": "natsuki/neutral.png"
+        }
+      ],
+      "dialogues": [
+        {
+          "speaker": "ナツキ",
+          "text": "まだ続きがあるって",
+          "bubble_position": "upper_right"
+        }
+      ]
     }
   ],
-  "cautions": [
-    "元記事2件のうち、副首都に関する会期末言及部分のみ使用した(皇室典範改正案に関する部分は今回不使用)",
-    "会期末までに成立するかどうかは断定せず、未確定表現を維持した",
-    "reference_imageはアキラ・書記官分を含め未作成(docs/manga-pipeline.mdの前提条件・未解決事項参照)。ファイル名は暫定"
-  ]
+  "scribe_panel": {
+    "layout": "scribe-left_note-right",
+    "expression": "neutral",
+    "reference_image": "scribe/neutral.png",
+    "emblem_reference": "scribe/equipment/official-scribe-bureau-emblem.png"
+  },
+  "cautions": []
 }

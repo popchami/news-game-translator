@@ -4,8 +4,11 @@
 「完了/次/保留」の形で常に上書き更新する。詳細な設計は各ドキュメントを
 参照すること(このファイル自体は要約のみを保持する)。
 
-最終更新: 2026-07-20(ChatGPT漫画生成ルート実装完了・diff提示待ち、
-Gemini API自動化ルートは調査完了・方針承認待ち)
+最終更新: 2026-07-24(Manga News Packet v2への全面移行・正本テンプレート
+仕様確定。feature branch `manga-packet-v2`上で実装・分割Codexレビュー
+A〜D完了、Blocker/Critical/Major/Minor残件0、テスト350件全合格、
+comfyui-mobile-system側との接続契約18項目すべてMATCH確認済み。
+**mainにはまだ未反映**(merge・Release未実施)。次はDraft PRの確認待ち
 
 ---
 
@@ -48,13 +51,16 @@ main へマージ済み。
 日次下書きとは独立に処理できる。GitHubは読み取り専用、RSSフォールバック
 なし、通常/緊急モード同時実行時の台帳競合はflockで排他制御。
 
-### ChatGPT漫画生成ルート(2026-07-20、実装完了・mainへは未マージ)
+### ChatGPT漫画生成ルート(2026-07-20実装、コミット`1d4d42e`でmain統合済み)
 
 RunPod+ComfyUIの自動生成ルート(Phase 2以降)とは別に、ChatGPTのチャット
 画面へ人間が構成案・参照画像を渡して5コマ漫画を1枚絵として生成する運用を
 正式ルートとして整備した。ブランチ`feature/chatgpt-manga-route`
-(mainから分岐、8commit)で実装。**mainへのマージは未実施、チャミの
-diff確認・承認待ち(Step9)。**
+(mainから分岐、8commit)で実装。**mainへsquash-merge済み(コミット
+`1d4d42e`)。旧記載「mainへのマージは未実施」は本ファイルの更新漏れであり
+誤り(2026-07-23に本ファイルを確認して修正)。ブランチ自体は削除せず残存**
+(なお、この節で導入した`reference_images`複数形・`validate_chatgpt_route()`
+は、下記「Manga News Packet v2」により汎用スキーマへ統合され廃止済み)。
 
 - **決定事項(チャミ)**: 4コマの型を刷新。panels(第1〜4コマ)はハルト・
   ナツキ専任とし、書記官はscribe_note(第5コマ)専任へ一本化(旧型は
@@ -108,6 +114,92 @@ diff確認・承認待ち(Step9)。**
   コミット`776a00c`)。**mainへのマージ前に、Codex利用再開後の正式レビュー
   実施を検討の余地あり**
 
+### Manga News Packet v2への全面移行(2026-07-23〜24、feature branch上で実装・レビュー完了・mainへ未反映)
+
+チャミが提示した正本の5コマテンプレート仕様(1080×1920px、5コマの座標・
+枠線6px・コマ間隔19px。comfyui-mobile-system側に数値正本を配置)確定に
+伴い、Manga News PacketをPACKET_VERSION 2へ全面移行した。ブランチ
+`manga-packet-v2`(mainから分岐)上で実装・Codexレビュー・修正まで完了。
+**mainへのマージ・Release作成は未実施、チャミの確認待ち。**
+
+- **分割Codexレビュー完了**(2026-07-24): 差分を4分割してレビュー
+  (A: Packet v2中核スキーマ/検証、B: NGT連携・UI・文書、C: comfyui-
+  mobile-system側テンプレート仕様、D: 2リポジトリ間の接続契約18項目)。
+  各分割ともBlocker/Critical/Major/Minor**残件0**まで指摘を修正済み
+  (発見した指摘は全て妥当と確認の上で採用、誤検出での不採用はなし)
+- **テスト結果**: news-game-translator **350件全合格**、
+  comfyui-mobile-system **125件全合格**(いずれも
+  `python3 -m unittest discover -s tests`)
+- **接続契約(分割レビューD)**: packet_version・panels構造・
+  camera_angle/framing/position/bubble_positionの各enum・31表情タグ・
+  `CHARACTER_REFERENCE_ID`・reference_image論理ID形式・書記局章ID・
+  テンプレート座標など**18項目すべてMATCH**(不一致0件)
+
+- **移行判断**: `drafts/manga_packets/`(実運用中データの置き場)は
+  `.gitkeep`のみで空、`data/state/`にも実運用中のv1 Packetは存在しない
+  ことを確認した上で、後方互換コードを持たない一括移行を選択(チャミの
+  指示どおり)
+- **決定事項(チャミ)**:
+  1. panels(第1〜4コマ)は1コマ1人・単一`dialogue`文字列という制約を廃止し、
+     1コマ最大2人(`performers`)・複数吹き出し(`dialogues`、最大2個)を
+     持てる構造へ変更
+  2. `role`を自由記述から`setup`/`development`/`turn`/`resolution`の
+     固定4値へ変更し、`panel_no`との対応を必須化
+  3. 第1〜4コマの登場人物を「ハルト・ナツキ専任」から「ハルト・ナツキ・
+     アキラ・フユミの4人から2〜3人を選択」へ拡張(アキラ・フユミの参照
+     画像完成に伴う変更)。書記官は第1〜4コマに一切登場させない方針は継続
+  4. 第5コマに`scribe_panel`(`layout`/`expression`/`reference_image`/
+     `emblem_reference`)を新設。書記官の正本画像(表情31+書記局章1、
+     comfyui-mobile-system側で完成・Release公開済み)を初めて参照可能にした
+  5. 旧`validate_chatgpt_route`(panelsをハルト・ナツキに固定する別レイヤー
+     検証)は、v2の`manga_schema.validate_packet`自体が同等以上の制約
+     (物語側2〜3人+書記官、書記官はpanels対象外)を一般スキーマとして
+     持つため廃止
+- **`scripts/manga_schema.py`**: 全面書き換え。`PACKET_VERSION=2`、
+  `STORY_CHARACTERS`/`SCRIBE_CHARACTER`、`CHARACTER_REFERENCE_ID`
+  (Packetの日本語表示名→comfyui-mobile-system側ローマ字フォルダ名の対応、
+  両リポジトリ間の接続契約)、`performers`/`dialogues`/`scribe_panel`の
+  検証関数、画角・フレーミングの多様性チェック(連続コマでの重複禁止、
+  4コマ全体で3種類以上、全身構図は1話最大1コマ)、セリフの三点リーダー
+  のみ拒否・行数/文字数制限(Unicode正規化後の表示文字数で検査)を追加。
+  `PANEL_COUNT=4`は変更なし(第5コマは引き続きpanelsに含めない)
+- **`scripts/validate_manga.py`**: `validate_chatgpt_route`関連を削除。
+  `build_packet_text_blob`をv2フィールド名(`dialogues[].text`・
+  `negative_prompt`・`caption`)に対応させた
+- **`scripts/collect_manga_reference_images.py`**: `panels[].performers[]`・
+  `scribe_panel`からreference_imageを抽出するよう更新(書記官の正本画像も
+  収集対象に追加。旧コメント「書記官の正本画像は現時点で未準備」は誤り)
+- **`data/state/manga_packet.example.json`**: v2形式へ更新。
+  `data/state/manga_packet.chatgpt_route.example.json`は、ChatGPTルート
+  専用制約の廃止に伴い削除(v2の単一サンプルへ統合)
+- **`prompts/manga_script.md`**: v2版として全面書き換え。登場人物の選び方
+  (4人から2〜3人)、画角・構図のルール、キャラクター固定事項(comfyui-
+  mobile-system側の正本と一致させる装備・利き手の記載)、表情タグ31種の
+  用途・避ける場面の対応表(31行)を追加
+- **`docs/manga-pipeline.md`**: v0.8。前提条件を「5人全員の参照画像完成
+  済み」に更新(旧「アキラ・フユミ・書記官は未完成」は誤り)。第5コマの
+  仕様を「書記官解説カットストック5〜10枚」から「表情31種+書記局章の
+  正本画像から選択」へ更新。テンプレート物理仕様はcomfyui-mobile-system側
+  `five_panel_template.json`/`.md`へ分離することを明記
+- **`docs/worldbook.md`**: 「X用5コマ構成」節を改訂。panels登場人物を
+  「ハルト・ナツキ専任」から「4人から2〜3人選択」へ更新
+- **`manga/characters.md`**: v0.3-draft。ナツキ・アキラ・フユミ・書記官の
+  装備欄を、comfyui-mobile-system側で完成した実際の正本画像と一致するよう
+  修正(旧記載はキャラクター設定の初期草案のままで、実際に生成・登録された
+  資産〔ナツキ=日本弓+右籠手、アキラ=符・トンカチ・釘、フユミ=薬箱、
+  書記官=タブレット+ペン〕と食い違っていたことが今回判明・修正)
+- **`app/isekai_inbox.html`**: `panelCard`等をv2の`performers`/`dialogues`
+  構造に対応させ、ChatGPT用プロンプトの生成部分もPacketの実際の
+  `characters`を動的に反映するよう修正(旧実装はハルト・ナツキを
+  ハードコードしていた)
+- **テスト**: 320件全て合格(`python3 -m unittest discover -s tests`)。
+  v2構造・多様性ルール・文字数制限・scribe_panel・既存の参照画像取得/
+  論理ID解決テストを含め全件回帰確認済み
+- **正本テンプレートPNG**: `/sdcard/Download/manga_panel_template_v3.png`
+  (1080×1920)が指定座標と完全一致することをPillowで実測検証済み
+  (詳細はcomfyui-mobile-system側HANDOFF.md参照)。数値正本はJSON側であり、
+  PNG自体はどちらのリポジトリにもコミットしていない
+
 ### Gemini API自動化ルート(2026-07-20、調査のみ完了・実装未着手)
 
 ChatGPTルートとは別に、Gemini APIを直接呼び出して人手を介さず5コマ画像を
@@ -120,10 +212,17 @@ ChatGPTルートとは別に、Gemini APIを直接呼び出して人手を介さ
   確認済み(TLS/DNSとも正常)
 - APIキーはOS環境変数での管理を推奨(`.env`ファイル・追加パースライブラリ
   とも不要)
-- `feature/chatgpt-manga-route`への依存度が高い(`reference_images`
-  スキーマ・`validate_chatgpt_route()`・`collect_manga_reference_images.py`
-  をそのまま再利用想定)。そのため**ブランチ戦略(chatgpt-manga-route
-  マージ後に着手 or 直接スタックするか)はチャミの判断待ち**
+- 元々`feature/chatgpt-manga-route`(v1のPacket仕様、`reference_images`
+  複数形フィールド・`validate_chatgpt_route()`)への依存度が高い設計として
+  提示していたが、**2026-07-24時点でPacketはv2へ全面移行済み**(下記
+  「Manga News Packet v2への全面移行」参照)。`reference_images`(panel
+  直下の複数形フィールド)は`panels[].performers[].reference_image`へ、
+  `validate_chatgpt_route()`は`manga_schema.validate_packet`本体の
+  characters/performers検証へ統合され、いずれも現在は存在しない。
+  Gemini APIルートに着手する場合は、これらv1時点の設計ではなくv2の
+  スキーマ(`scripts/manga_schema.py`)・`scripts/collect_manga_reference_images.py`
+  (v2のperformers/scribe_panel抽出に対応済み)を前提に再設計すること。
+  **ブランチ戦略・実装計画のたたき台自体もv2に合わせた再検討が必要**
 - 概算コスト・ブランチ名案(`feature/gemini-api-manga-route`)・実装計画
   たたき台は提示済み。次のアクションはチャミの承認(SDK/REST方式・
   ブランチ戦略の確定)
@@ -132,28 +231,27 @@ ChatGPTルートとは別に、Gemini APIを直接呼び出して人手を介さ
 
 ## 次
 
-1. **チャミへdiff一式を提示し、`feature/chatgpt-manga-route`のmainマージ
-   承認を得る**(Step9、直近の作業)。承認後、Codex利用再開(2026/7/25以降)
-   を待ってから正式レビューを行うか、このまま自己レビュー結果でマージする
-   かもあわせて確認する
+1. **チャミへdiff一式を提示し、`manga-packet-v2`ブランチのmainマージ
+   承認を得る**(直近の作業。push・PR作成・マージ・Release作成は今回の
+   作業範囲外、明示的な指示があるまで実施しない)
 2. **Gemini API自動化ルート**: 調査結果(ブランチ戦略・SDK/REST方式・
    APIキー管理方針)についてチャミの承認を得てから、
    `feature/gemini-api-manga-route`で実装着手
 3. **comfyui-mobile-system側の対応**(Phase 2、従来から継続): SDXL+
-   IPAdapterのマンガ用ComfyUI Workflow構築。ハルト・ナツキの参照画像は
-   2026-07-20時点で完成済み(表情・4方向立ち絵、ナツキはさらに装備・紋も)
+   IPAdapterのマンガ用ComfyUI Workflow構築(今回はデータ層・テンプレート
+   仕様の確定のみ。Workflow本体・RunPod接続・画像生成は未着手)。
+   5人全員の参照画像は2026-07-23時点で完成済み
 4. **組版後処理の調査**(RunPodルート向け、従来から継続): 吹き出し配置・
-   キャラ配置構図の制御・4コマへの結合処理・日本語描画方式
+   キャラ配置構図の制御・4コマへの結合処理・日本語描画方式(物理座標の
+   正本はcomfyui-mobile-system側`five_panel_template.json`を参照)
 
 ---
 
 ## 保留
 
-- **アキラ・フユミ・書記官の設定画**: manga/characters.mdの必要な設定画
-  一覧に沿って、ChatGPTでの生成を担当(チャミ側作業)。ハルト・ナツキは
-  2026-07-20時点で完成済み(旧記載「ハルトのみ完成」は誤りだったため
-  docs/manga-pipeline.mdを修正済み)
-- **書記官の解説カットストック**(RunPodルート向け): 5〜10枚。設定画と
-  同様にChatGPTで生成予定
 - **LoRA検討メモ**: LoRAを作ること自体は未確定。docs/manga-pipeline.mdの
   「LoRA検討メモ」に記録済み
+
+(旧保留事項「アキラ・フユミ・書記官の設定画」「書記官の解説カットストック
+5〜10枚」は、comfyui-mobile-system側で5人全員の参照画像〔表情31+
+turnaround4、書記官は書記局章1も〕が完成・Release公開済みとなったため解消)

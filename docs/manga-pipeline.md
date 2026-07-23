@@ -1,6 +1,6 @@
 # 異世界ニホン システム設計(NGT) — マンガ化パイプライン
 
-版: v0.6
+版: v0.9
 作成日: 2026-07-19
 
 ## この文書の位置づけ
@@ -26,8 +26,18 @@ X投稿用短縮版である。** 縦読み版は将来展開として存置し�
 - **第1〜4コマ(起承転結)**: Manga News Packetの`panels`に対応し、コマごとに
   画像生成する(scripts/manga_schema.pyの`panels`は引き続き4要素固定)
 - **第5コマ(解説コマ)**: `scribe_note`(書記官の解説)を表示するコマ。毎回
-  画像生成はせず、事前生成した書記官の解説カットストックから1枚を選択し、
-  解説テキストを機械合成する(詳細は「マンガ生成方式」節参照)
+  画像生成はせず、書記官の正本画像(表情31種+書記局章、完成済み)から
+  `scribe_panel`で指定した1枚を選択し、解説テキストを機械合成する
+  (詳細は「マンガ生成方式」節参照。旧「事前生成した解説カットストック
+  5〜10枚」という計画は、表情31種すべてが正本として完成したことで不要に
+  なった、2026-07-24訂正)
+
+完成画像の物理レイアウト(1080×1920px、5コマの座標・枠線6px・コマ間隔
+19px等)は、comfyui-mobile-system側
+`profiles/sdxl/isekai_nihon_manga/five_panel_template.json`(数値の正本)・
+`five_panel_template.md`(人間向け解説)を正とする。本文書はPacketの
+データ構造のみを規定し、座標等の物理仕様はcomfyui-mobile-system側へ
+分離する(2026-07-23、正本テンプレート確定に伴い追記)。
 
 ---
 
@@ -257,11 +267,19 @@ RunPodは、この確定済み設計を画像化するだけとする(画像化�
 - 日本語文字化け防止
 - コマ品質向上
 
-### 第5コマ(解説コマ、確定仕様)
+### 第5コマ(解説コマ、確定仕様。2026-07-23改訂)
 
-第5コマは毎回画像生成しない。事前生成した書記官の解説カットストック
-(5〜10枚。例: 正面で記録を読む/横顔で書き物/掲示板の奥に佇む)から、
-組版時に1枚を選択し、`scribe_note`のテキストを機械合成する。
+第5コマは毎回画像生成しない。書記官の正本画像(comfyui-mobile-system側で
+登録・Release公開済み。表情31種+書記局章1種)から、Manga News Packetの
+`scribe_panel`(`layout`・`expression`・`reference_image`・
+`emblem_reference`)で指定された1枚を組版時に選択し、`scribe_note`の
+テキストを機械合成する。`layout`は`scribe-left_note-right`固定(書記官を
+左側、解説欄を右側へ配置)。
+
+(旧記載: 「事前生成した書記官の解説カットストック5〜10枚から選択」と
+していたが、書記官の表情セット31種+書記局章がすべて正本として完成済み
+(2026-07-23)となったため、選択プールを全31種の標準表情タグへ更新した。
+記事の内容・トーンに応じて`scribe_panel.expression`を選ぶ運用とする)
 
 将来の拡張として、運用が安定した後に第5コマも毎回生成する方式(b昇格)へ
 切り替え可能な設計とする(検証は後述「Phase 2調査項目」の「第5コマの毎回
@@ -299,15 +317,21 @@ Manga News Packet(JSON)とアプリのHTML/静的アセットを同一オリジ�
 
 ## 前提条件・未解決事項
 
-- **キャラクター参照画像はハルト・ナツキが完成済み**(2026-07-20更新)。
-  comfyui-mobile-system側で、両キャラクターとも表情31種・4方向立ち絵
-  (turnaround)4種がGitHub Release資産として登録・実URL取得検証済み。
-  ナツキはさらに装備・紋(equipment)2種も完成済み(旧記載「ハルトのみ完成」
-  「ナツキは現時点で未登場のため優先度は更に低い」は誤り、更新した)。
-  実体は別リポジトリ側(`profiles/sdxl/isekai_nihon_manga/reference_images/
-  {haruto,natsuki}/`、Release: `haruto-expression-set-v2`・
-  `haruto-turnaround-v1`・`natsuki-complete-set-v2`)。アキラ・フユミ・
-  書記官の参照画像は未完成であり、現時点では作成しない
+- **キャラクター参照画像は5人全員が完成済み**(2026-07-23更新)。
+  comfyui-mobile-system側で、ハルト・ナツキ・アキラ・フユミ・書記官の
+  全キャラクターについて、表情31種・4方向立ち絵(turnaround)4種が
+  GitHub Release資産として登録・実URL取得検証済み。ナツキ・アキラは
+  装備・紋(equipment)も完成済み(ナツキ2種、アキラ13種)、書記官は
+  書記局章(equipment)1種が完成済み。フユミはequipment未収録(旧記載
+  「アキラ・フユミ・書記官の参照画像は未完成であり、現時点では作成しない」
+  は誤り、更新した)。実体は別リポジトリ側
+  (`profiles/sdxl/isekai_nihon_manga/reference_images/
+  {haruto,natsuki,akira,fuyumi,scribe}/`、Release:
+  `haruto-expression-set-v2`・`haruto-turnaround-v1`・
+  `natsuki-complete-set-v2`・`akira-complete-archive-v1`・
+  `fuyumi-complete-archive-v1`・`scribe-complete-archive-v1`)。
+  Packetの`characters`(表示名)からこのローマ字IDへの対応は
+  scripts/manga_schema.py の `CHARACTER_REFERENCE_ID` を正とする
   (manga/characters.mdの必要な設定画一覧参照)
 - **画風統一の方式は未検証**。SDXL + IPAdapterによるスタイル転写(ハルトの
   ChatGPT製参照画像を基準に、SDXLで生成する他キャラ・背景の画風を揃える)を
@@ -382,10 +406,11 @@ Manga News Packet(JSON)とアプリのHTML/静的アセットを同一オリジ�
 
 #### 第5コマ(解説コマ)関連(未定・要検証)
 
-- 書記官の解説カットストックの作成(設定画と同様にChatGPTで生成予定。
-  5〜10枚、正面で記録を読む/横顔で書き物/掲示板の奥に佇む等のバリエーション)
-- 第5コマの毎回生成化の検証(運用が安定した後、ストック選択方式から毎回
-  生成方式(b昇格)へ切り替える場合の品質・コストの検証)
+- ~~書記官の解説カットストックの作成~~: 2026-07-23、comfyui-mobile-system側で
+  書記官の表情31種+書記局章がすべて正本として完成・Release公開されたため、
+  この項目は解消済み(専用の5〜10枚カットストックは不要になった)
+- 第5コマの毎回生成化の検証(運用が安定した後、`scribe_panel`の表情選択方式
+  から毎回生成方式(b昇格)へ切り替える場合の品質・コストの検証)
 
 ---
 
@@ -438,7 +463,7 @@ comfyui-mobile-system(別リポジトリ、`chatgpt-work`ブランチ)は、Kick
 ### Phase 5
 
 - 第1〜4コマの合成
-- 第5コマの組版(解説カットストックから選択+scribe_noteテキスト合成)
+- 第5コマの組版(`scribe_panel`が指定する正本画像+scribe_noteテキスト合成)
 - 吹き出し配置
 - 日本語描画
 
@@ -512,3 +537,5 @@ python3 scripts/serve_inbox.py
 | v0.5 | 2026-07-19 | Phase 1・ステップ3(受信アプリ)を実装。app/isekai_inbox.html(NGT側受信アプリ、画像生成なし版)、scripts/serve_inbox.py(ローカルHTTPサーバー)を追加。動作確認手順を末尾に追記 |
 | v0.6 | 2026-07-19 | Phase 2調査項目「キャラ固定方式」にLoRA検討メモ(未確定)を追加。LoRAを作ると決めた場合の優先順位(キャラクターLoRA>表情LoRA、スタイルLoRAは保留、ポーズLoRAは作成しない)と学習画像の目安を記録。キャラ固定方式の確定自体はIPAdapterパイロット生成の結果待ちのままで変更なし |
 | v0.7 | 2026-07-20 | ChatGPT漫画生成ルート整備(`feature/chatgpt-manga-route`)に伴い「前提条件・未解決事項」の記載を更新。「キャラクター参照画像はハルトのみ完成」という古い前提を、ハルト・ナツキとも表情・4方向立ち絵まで完成済み(ナツキはさらに装備・紋も完成済み)であるという実際の状態に修正。あわせて、panels(第1〜4コマ)がハルト・ナツキ専任・書記官はscribe_note専任という新しい4コマの型(docs/worldbook.md参照)、および参照画像の複数形化(`reference_images`)を反映 |
+| v0.8 | 2026-07-23 | 正本テンプレート仕様(1080×1920・5コマ座標、comfyui-mobile-system側`profiles/sdxl/isekai_nihon_manga/five_panel_template.json`)確定に伴い、Manga News PacketをPACKET_VERSION 2へ全面移行(実運用中のv1データが存在しないことを確認の上、後方互換コードは持たず一括移行。詳細はdocs/HANDOFF.md参照)。panels(第1〜4コマ)は、ハルト・ナツキ専任からハルト・ナツキ・アキラ・フユミの4人から2〜3人を選ぶ方式へ拡張し、1コマ1人・単一セリフだった構造をperformers(最大2人、position/facing/gaze/expression/reference_image)・dialogues(最大2個、speaker/text/bubble_position)へ変更。roleをsetup/development/turn/resolutionの固定4値へ変更。画角(camera_angle)・フレーミング(framing)の多様性ルール(連続コマでの重複禁止、4コマ全体で3種類以上、全身構図は1話最大1コマ)を追加。第5コマにscribe_panel(layout/expression/reference_image/emblem_reference)を新設し、書記官の正本画像(表情31+書記局章1、完成済み)を初めて参照可能にした。旧`validate_chatgpt_route`(panelsをハルト・ナツキに固定する別レイヤー検証)は、v2の一般スキーマが同等以上の制約を持つため廃止 |
+| v0.9 | 2026-07-24 | チャミ決定によりv0.8時点の2箇所を再修正。(1) `camera_angle`は自由記述を不採用とし、固定enum(`eye_level`/`high_angle`/`low_angle`/`over_shoulder`/`top_down`)へ変更(表記揺れ〔`eye level`/`eye-level`/`normal angle`等〕により連続構図の検証を回避できてしまうため)。(2) `bubble_position`は`performer.position`(人物の左右配置)との共有をやめ、専用enum(`upper_left`/`upper_center`/`upper_right`/`lower_left`/`lower_center`/`lower_right`、吹き出し本体の上下左右配置)へ分離。吹き出しの尾は`dialogue.speaker`に対応するperformerへ向ける設計とし、`performer.position`との一致は要求しない |

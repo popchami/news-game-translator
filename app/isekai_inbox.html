@@ -271,34 +271,54 @@ function showInbox() {
     });
 }
 
-function panelReferenceCharacters(panel) {
-  // reference_images(複数形、新形式)のキー、またはreference_image(単数、
-  // 旧形式)のプレフィックスから、登場キャラクター名の表示用文字列を作る。
+function panelPerformers(panel) {
+  // Manga News Packet v2のpanels[].performers(配列)から表示用配列を作る。
   // 表示のみに使うため、解決の正しさはscripts/manga_schema.py側の検証に
   // 委ねる(ここでは崩れたデータでも表示が壊れないことだけを保証する)。
-  if (panel && panel.reference_images && typeof panel.reference_images === "object") {
-    var names = Object.keys(panel.reference_images);
-    return names.length ? names.join("・") : "";
+  if (panel && Array.isArray(panel.performers)) {
+    return panel.performers.filter(function (p) {
+      return p && typeof p === "object";
+    });
   }
-  if (panel && typeof panel.reference_image === "string" && panel.reference_image.indexOf("/") !== -1) {
-    return panel.reference_image.split("/")[0];
+  return [];
+}
+
+function panelDialogues(panel) {
+  if (panel && Array.isArray(panel.dialogues)) {
+    return panel.dialogues.filter(function (d) {
+      return d && typeof d === "object";
+    });
   }
-  return "";
+  return [];
 }
 
 function panelCard(panel) {
   var no = panel && panel.panel_no != null ? panel.panel_no : "?";
-  var refChars = panelReferenceCharacters(panel);
+  var performers = panelPerformers(panel);
+  var dialogues = panelDialogues(panel);
+
   var html =
     '<div class="panel-card">' +
-    '<div class="panel-no">第' + escapeHtml(no) + "コマ</div>" +
-    '<div class="dialogue">' + escapeHtml(panel && panel.dialogue) + "</div>" +
+    '<div class="panel-no">第' + escapeHtml(no) + "コマ(" + escapeHtml(panel && panel.role) + ")</div>";
+
+  dialogues.forEach(function (d) {
+    html += '<div class="dialogue">' + escapeHtml(d.speaker) + "「" + escapeHtml(d.text) + "」</div>";
+  });
+
+  html +=
     '<div class="meta">場面: ' + escapeHtml(panel && panel.scene) + "</div>" +
     '<div class="meta">背景: ' + escapeHtml(panel && panel.background) + "</div>" +
-    '<div class="meta">表情タグ: ' + escapeHtml(panel && panel.expression) + "</div>";
-  if (refChars) {
-    html += '<div class="meta">参照キャラクター: ' + escapeHtml(refChars) + "</div>";
+    '<div class="meta">構図: ' + escapeHtml(panel && panel.framing) + " / " + escapeHtml(panel && panel.camera_angle) + "</div>";
+
+  if (performers.length) {
+    var performerText = performers
+      .map(function (p) {
+        return (p.name || "?") + "(" + (p.expression || "?") + ")";
+      })
+      .join("・");
+    html += '<div class="meta">登場人物: ' + escapeHtml(performerText) + "</div>";
   }
+
   html += "</div>";
   return html;
 }
@@ -314,7 +334,7 @@ function buildChatGptPrompt(packet) {
   var source = (packet && packet.source) || {};
   var lines = [];
   lines.push("【依頼】");
-  lines.push("異世界ニホンの縦読み5コマ漫画を作成する。");
+  lines.push("異世界ニホンのX投稿用5コマ構成漫画を作成する(縦読み版とは別形式)。");
   lines.push("");
   lines.push("【重要】");
   lines.push("まだ画像生成しない。");
@@ -332,23 +352,28 @@ function buildChatGptPrompt(packet) {
   lines.push("書記官の解説(第5コマの元情報)：" + orEmptyDash(packet && packet.scribe_note));
   lines.push("");
   lines.push("【キャラクター】");
+  var characters = Array.isArray(packet && packet.characters) ? packet.characters : [];
+  var storyCharacters = characters.filter(function (name) {
+    return name !== "書記官";
+  });
   lines.push("第1〜4コマ：");
-  lines.push("・ハルト");
-  lines.push("・ナツキ");
+  storyCharacters.forEach(function (name) {
+    lines.push("・" + name);
+  });
   lines.push("");
   lines.push("第5コマ：");
   lines.push("・書記官");
   lines.push("");
-  lines.push("ハルトとナツキの外見は、添付した正本画像へ忠実にする。");
+  lines.push("各登場人物の外見は、添付した正本画像へ忠実にする。");
   lines.push("衣装、髪型、家紋、武器、装備位置を変更しない。");
   lines.push("正本画像は外見参照であり、画像の貼り付け・切り抜き合成はしない。");
   lines.push("各コマの場面に合わせてポーズ・表情を新規に描く。");
   lines.push("");
   lines.push("【5コマ構成】");
-  lines.push("第1コマ：ニュースの導入");
-  lines.push("第2コマ：ハルトの疑問");
-  lines.push("第3コマ：ナツキの整理");
-  lines.push("第4コマ：決定済み・未決定・今後の手続きへの接続");
+  lines.push("第1コマ(setup)：ニュースの導入");
+  lines.push("第2コマ(development)：最初の疑問・反応");
+  lines.push("第3コマ(turn)：別角度からの整理・条件確認");
+  lines.push("第4コマ(resolution)：決定済み・未決定・今後の手続きへの接続");
   lines.push("第5コマ：書記官によるニュース解説");
   lines.push("");
   lines.push("【構成ルール】");
@@ -453,6 +478,13 @@ function showDetail(encodedFilename) {
       html += '<div class="card scribe-card">';
       html += "<h2>第5コマ(書記官の解説)</h2>";
       html += '<div class="narrative">' + escapeHtml(packet.scribe_note) + "</div>";
+      var scribePanel = packet.scribe_panel;
+      if (scribePanel && typeof scribePanel === "object") {
+        html += '<div class="meta">レイアウト: ' + escapeHtml(scribePanel.layout) + "</div>";
+        html += '<div class="meta">表情タグ: ' + escapeHtml(scribePanel.expression) + "</div>";
+        html += '<div class="meta">参照画像: ' + escapeHtml(scribePanel.reference_image) + "</div>";
+        html += '<div class="meta">書記局章: ' + escapeHtml(scribePanel.emblem_reference) + "</div>";
+      }
       html += "</div>";
 
       if (cautions.length) {
