@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""scripts/validate_manga.py のテスト(異世界ニホン4コマ版 Phase 1)。
+"""scripts/validate_manga.py のテスト(異世界ニホン X用5コマ構成 Packet v2)。
 
-manga_schema.pyの構造検証(4コマ固定・登場キャラ<=3人等)に加え、
-scripts/banned_terms.pyの禁止語検証(法案・選挙の文脈語、政党名
-カタカナ化、ニホンに実在しない王制表現)がPacket内の日本語テキスト
-全体に対して行われること、およびオプションの元記事JSON(raw_article)を
-渡すことで王制語検査の入力照合範囲が広がることを検証する。Python標準
-ライブラリのみを使用する(unittest, pathlib, sys, json, subprocess,
-tempfile)。
+manga_schema.pyの構造検証(4コマ固定・登場キャラ2〜3人+書記官・
+performers/dialogues等)に加え、scripts/banned_terms.pyの禁止語検証
+(法案・選挙の文脈語、政党名カタカナ化、ニホンに実在しない王制表現)が
+Packet内の日本語テキスト全体に対して行われること、およびオプションの
+元記事JSON(raw_article)を渡すことで王制語検査の入力照合範囲が広がる
+ことを検証する。Python標準ライブラリのみを使用する(unittest, pathlib,
+sys, json, subprocess, tempfile)。
+
+v1からv2への変更点: 旧`validate_chatgpt_route`関連のテスト
+(ChatGptRouteValidationTest・ChatGptRouteExampleFileTest)は、
+validate_chatgpt_route自体の廃止に伴い削除した(詳細はscripts/
+validate_manga.pyのモジュールdocstring・docs/HANDOFF.md参照)。
 """
 import json
 import pathlib
@@ -19,10 +24,9 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import manga_schema  # noqa: E402
 import validate_manga as vm  # noqa: E402
 
-from test_manga_schema import make_packet, make_panel, make_panels  # noqa: E402
+from test_manga_schema import make_dialogue, make_packet, make_panel, make_panels  # noqa: E402
 
 
 class ValidateMangaPacketStructureTest(unittest.TestCase):
@@ -36,10 +40,20 @@ class ValidateMangaPacketStructureTest(unittest.TestCase):
         reasons = vm.validate_manga_packet(packet)
         self.assertTrue(any("4要素である必要があります" in r for r in reasons))
 
-    def test_more_than_three_characters_rejected(self):
-        packet = make_packet(characters=["ハルト", "ナツキ", "アキラ", "フユミ"])
+    def test_non_dict_root_does_not_crash(self):
+        # Codexレビュー指摘(Major): manga_schema.validate_packetは非dict
+        # rootを安全に検出するが、validate_manga_packetはその後も
+        # packet.get(...)を呼び続けており、list等ではAttributeErrorで
+        # 異常終了していた(2026-07-24修正)。
+        for bad_root in ([], "not-a-dict", None, 123):
+            with self.subTest(bad_root=bad_root):
+                reasons = vm.validate_manga_packet(bad_root)
+                self.assertTrue(any("オブジェクトである必要があります" in r for r in reasons))
+
+    def test_more_than_max_characters_rejected(self):
+        packet = make_packet(characters=["ハルト", "ナツキ", "アキラ", "フユミ", "書記官"])
         reasons = vm.validate_manga_packet(packet)
-        self.assertTrue(any("3人を超えています" in r for r in reasons))
+        self.assertTrue(any("4人を超えています" in r for r in reasons))
 
 
 class ContextualForbiddenTermTest(unittest.TestCase):
@@ -66,8 +80,15 @@ class ContextualForbiddenTermTest(unittest.TestCase):
         self.assertTrue(any("選抜戦" in r for r in reasons))
 
     def test_forbidden_term_detected_in_panel_dialogue(self):
+        # Codexレビュー指摘(Minor): bubble_position="left"は不正な値
+        # (performer.position用のenumであり、bubble_positionには使えない)
+        # だったため、このテストは禁止語検出とは無関係にpacket自体が
+        # 構造検証で不合格になっていた。有効なbubble_positionへ修正。
         panels = make_panels()
-        panels[0] = make_panel(1, dialogue="ハルト「この法案はクエスト受注だ!」")
+        panels[0] = make_panel(
+            1,
+            dialogues=[make_dialogue("ハルト", "この法案は\nクエスト受注だ!", "upper_left")],
+        )
         packet = make_packet(panels=panels)
         reasons = vm.validate_manga_packet(packet)
         self.assertTrue(any("クエスト受注" in r for r in reasons))
@@ -101,7 +122,7 @@ class RawArticleWideningTest(unittest.TestCase):
                 "url": "https://example.com/raw-1",
                 "summary": "外国の行事を報じた。",
             },
-            scribe_note="かつての「王都」の跡地が一般公開された。",
+            scribe_note="かつての「王都」の跡地が\n一般公開された。",
         )
         raw_article = {
             "title": "外国の史跡に関する報道",
@@ -127,7 +148,7 @@ class RawArticleWideningTest(unittest.TestCase):
                 "url": "https://example.com/raw-2",
                 "summary": "外国の行事を報じた。",
             },
-            scribe_note="かつての「王都」の跡地が一般公開された。",
+            scribe_note="かつての「王都」の跡地が\n一般公開された。",
         )
         raw_articles = [
             {
@@ -160,7 +181,7 @@ class RawArticleWideningTest(unittest.TestCase):
 
 class KingdomTermTest(unittest.TestCase):
     def test_nihon_kingdom_term_absent_from_source_rejected(self):
-        packet = make_packet(scribe_note="これはニホン王国の方針である。")
+        packet = make_packet(scribe_note="これはニホン王国の\n方針である。")
         reasons = vm.validate_manga_packet(packet)
         self.assertTrue(any("ニホン王国" in r for r in reasons))
 
@@ -171,7 +192,7 @@ class KingdomTermTest(unittest.TestCase):
                 "url": "https://example.com/1",
                 "summary": "ニホン王国という古い呼称が話題になった。",
             },
-            scribe_note="かつて「ニホン王国」と呼ばれた時代があった。",
+            scribe_note="かつて「ニホン王国」と\n呼ばれた時代があった。",
         )
         reasons = vm.validate_manga_packet(packet)
         self.assertFalse(any("ニホン王国" in r for r in reasons))
@@ -185,7 +206,7 @@ class KingdomTermTest(unittest.TestCase):
                 "url": "https://example.com/2",
                 "summary": "英国国王が来日し、歓迎行事が開かれた。",
             },
-            scribe_note="英国国王が来日し、歓迎行事が開かれた。",
+            scribe_note="英国国王が来日し、\n歓迎行事が開かれた。",
         )
         reasons = vm.validate_manga_packet(packet)
         self.assertEqual(reasons, [])
@@ -197,7 +218,7 @@ class KingdomTermTest(unittest.TestCase):
                 "url": "https://example.com/3",
                 "summary": "英国国王が来日した。",
             },
-            scribe_note="ニホンの女王が統治しているという設定にした。",
+            scribe_note="ニホンの女王が統治\nしているという設定。",
         )
         reasons = vm.validate_manga_packet(packet)
         self.assertTrue(any("ニホンの女王" in r for r in reasons))
@@ -209,9 +230,10 @@ class BuildTextBlobTest(unittest.TestCase):
         panels[0] = make_panel(
             1,
             scene="固有シーン語",
-            dialogue="固有セリフ語",
             background="固有背景語",
             image_prompt="unique image prompt marker",
+            negative_prompt="unique negative prompt marker",
+            dialogues=[make_dialogue("ハルト", "固有セリフ語", "left")],
         )
         packet = make_packet(panels=panels)
         blob = vm.build_packet_text_blob(packet)
@@ -219,12 +241,20 @@ class BuildTextBlobTest(unittest.TestCase):
         self.assertIn("固有セリフ語", blob)
         self.assertIn("固有背景語", blob)
         self.assertIn("unique image prompt marker", blob)
+        self.assertIn("unique negative prompt marker", blob)
 
     def test_banned_japanese_term_leaked_into_image_prompt_is_detected(self):
         # image_promptは本来英語だが、日本語の禁止語が混入した場合を
         # 検査で捕捉できることを確認する(Codexレビュー指摘)。
         panels = make_panels()
         panels[0] = make_panel(1, image_prompt="anime scene, ジミン党 representative at a podium")
+        packet = make_packet(panels=panels)
+        reasons = vm.validate_manga_packet(packet)
+        self.assertTrue(any("ジミン党" in r for r in reasons))
+
+    def test_banned_japanese_term_leaked_into_negative_prompt_is_detected(self):
+        panels = make_panels()
+        panels[0] = make_panel(1, negative_prompt="blurry, ジミン党, low quality")
         packet = make_packet(panels=panels)
         reasons = vm.validate_manga_packet(packet)
         self.assertTrue(any("ジミン党" in r for r in reasons))
@@ -242,121 +272,16 @@ class BuildTextBlobTest(unittest.TestCase):
         self.assertIn("固有事実語", blob)
 
 
-def _make_chatgpt_route_packet():
-    """panels1〜4をハルト・ナツキ(reference_images複数形)、書記官は
-    scribe_note専任とした、ChatGPTルート仕様に沿ったPacketを返す。
-    """
-    panels = []
-    for i in range(4):
-        panel = make_panel(i + 1)
-        del panel["reference_image"]
-        panel["reference_images"] = {
-            "ハルト": "haruto/surprise-medium.png",
-            "ナツキ": "natsuki/neutral.png",
-        }
-        panels.append(panel)
-    return make_packet(characters=["ハルト", "ナツキ", "書記官"], panels=panels)
-
-
-class ChatGptRouteValidationTest(unittest.TestCase):
-    """validate_chatgpt_route: panels1〜4=ハルト・ナツキ専任、
-    charactersは{ハルト,ナツキ,書記官}のみという追加制約を検証する。
+class ExampleFileTest(unittest.TestCase):
+    """data/state/manga_packet.example.json(v2)が、構造検証・禁止語検証を
+    含む完全なvalidate_manga_packetに合格することを確認する。
     """
 
-    def test_valid_chatgpt_route_packet_passes(self):
-        packet = _make_chatgpt_route_packet()
-        self.assertEqual(vm.validate_chatgpt_route(packet), [])
-
-    def test_generic_structural_validation_still_passes_for_same_packet(self):
-        # ChatGPTルート追加検証と、既存の汎用構造検証は独立して両方合格する。
-        packet = _make_chatgpt_route_packet()
-        self.assertEqual(manga_schema.validate_packet(packet), [])
-
-    def test_panel_using_legacy_singular_reference_image_rejected(self):
-        # ChatGPTルートではreference_images(複数形)が必須。
-        packet = _make_chatgpt_route_packet()
-        packet["panels"][0] = make_panel(1)  # legacy単数のreference_imageに戻す
-        reasons = vm.validate_chatgpt_route(packet)
-        self.assertTrue(any("reference_images(複数形)の指定が必要です" in r for r in reasons))
-
-    def test_scribe_in_panel_reference_images_rejected(self):
-        packet = _make_chatgpt_route_packet()
-        packet["panels"][3]["reference_images"] = {"書記官": "scribe/speaking-normal.png"}
-        reasons = vm.validate_chatgpt_route(packet)
-        self.assertTrue(
-            any("ChatGPTルートで許可されないキャラクター" in r and "書記官" in r for r in reasons)
-        )
-
-    def test_akira_or_fuyumi_in_panel_reference_images_rejected(self):
-        packet = _make_chatgpt_route_packet()
-        packet["panels"][0]["reference_images"] = {"アキラ": "akira/neutral.png"}
-        reasons = vm.validate_chatgpt_route(packet)
-        self.assertTrue(any("アキラ" in r for r in reasons))
-
-    def test_top_level_characters_with_akira_rejected(self):
-        packet = _make_chatgpt_route_packet()
-        packet["characters"] = ["ハルト", "アキラ"]
-        reasons = vm.validate_chatgpt_route(packet)
-        self.assertTrue(any("アキラ" in r for r in reasons))
-
-    def test_top_level_characters_with_scribe_allowed(self):
-        # 書記官はscribe_note(第5コマ)専任だがcharacters一覧への記載自体は
-        # 許可する(トップレベルcharactersはパネル出演とは別概念のため)。
-        packet = _make_chatgpt_route_packet()
-        packet["characters"] = ["ハルト", "書記官"]
-        self.assertEqual(vm.validate_chatgpt_route(packet), [])
-
-    def test_non_dict_packet_rejected(self):
-        self.assertTrue(vm.validate_chatgpt_route("not-a-dict"))
-
-    def test_malformed_panel_does_not_crash(self):
-        packet = _make_chatgpt_route_packet()
-        packet["panels"][0] = "not-a-dict"
-        # クラッシュしないことを確認する(型不正の詳細検出はmanga_schema側の責務)。
-        vm.validate_chatgpt_route(packet)
-
-    def test_default_make_packet_using_legacy_single_reference_image_fails_route_check(self):
-        # 既存のmake_packet()(reference_image単数、characters=ハルト/アキラ/書記官)は
-        # 汎用構造検証(manga_schema.validate_packet)には合格し続けるが、
-        # ChatGPTルート追加検証には合格しない(後方互換と新ルート制約は別レイヤー)。
-        packet = make_packet()
-        self.assertEqual(manga_schema.validate_packet(packet), [])
-        self.assertTrue(vm.validate_chatgpt_route(packet))
-
-
-class ChatGptRouteExampleFileTest(unittest.TestCase):
-    """data/state/manga_packet.chatgpt_route.example.json が、構造検証・
-    ChatGPTルート追加検証・禁止語検証のすべてに合格することを確認する。
-    """
-
-    def _load(self):
-        example_path = ROOT / "data" / "state" / "manga_packet.chatgpt_route.example.json"
+    def test_example_packet_passes_full_validation(self):
+        example_path = ROOT / "data" / "state" / "manga_packet.example.json"
         with example_path.open(encoding="utf-8") as f:
-            return json.load(f)
-
-    def test_passes_generic_structural_validation(self):
-        packet = self._load()
-        self.assertEqual(manga_schema.validate_packet(packet), [])
-
-    def test_passes_chatgpt_route_validation(self):
-        packet = self._load()
-        self.assertEqual(vm.validate_chatgpt_route(packet), [])
-
-    def test_passes_full_validate_manga_packet(self):
-        # 禁止語検証(scripts/banned_terms.py)も含めて合格することを確認する。
-        packet = self._load()
+            packet = json.load(f)
         self.assertEqual(vm.validate_manga_packet(packet), [])
-
-    def test_legacy_example_file_does_not_pass_chatgpt_route_validation(self):
-        # 旧形式サンプル(data/state/manga_packet.example.json)は、
-        # 構造検証には合格し続けるが、ChatGPTルート追加検証には合格しない
-        # (4コマ目が書記官であるため)。新旧の使い分けが機能していることの
-        # 回帰確認。
-        legacy_path = ROOT / "data" / "state" / "manga_packet.example.json"
-        with legacy_path.open(encoding="utf-8") as f:
-            legacy_packet = json.load(f)
-        self.assertEqual(manga_schema.validate_packet(legacy_packet), [])
-        self.assertTrue(vm.validate_chatgpt_route(legacy_packet))
 
 
 class CliSourceJsonArgumentTest(unittest.TestCase):
@@ -376,7 +301,7 @@ class CliSourceJsonArgumentTest(unittest.TestCase):
                 "url": "https://example.com/cli-1",
                 "summary": "外国の行事を報じた。",
             },
-            scribe_note="かつての「王都」の跡地が一般公開された。",
+            scribe_note="かつての「王都」の跡地が\n一般公開された。",
         )
         raw_articles = [
             {
@@ -405,7 +330,7 @@ class CliSourceJsonArgumentTest(unittest.TestCase):
                 "url": "https://example.com/cli-2",
                 "summary": "外国の行事を報じた。",
             },
-            scribe_note="かつての「王都」の跡地が一般公開された。",
+            scribe_note="かつての「王都」の跡地が\n一般公開された。",
         )
         packet_path = self.tmp / "packet.json"
         packet_path.write_text(json.dumps(packet, ensure_ascii=False), encoding="utf-8")

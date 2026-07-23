@@ -129,18 +129,18 @@ class ResolveSourcePathTest(unittest.TestCase):
 
 
 class ExtractReferenceImagesFromPacketTest(unittest.TestCase):
-    def test_legacy_singular_extracted(self):
-        packet = {"panels": [{"reference_image": "haruto/neutral.png"}]}
-        self.assertEqual(cmri.extract_reference_images_from_packet(packet), ["haruto/neutral.png"])
+    """Manga News Packet v2(panels[].performers[]・scribe_panel)からの
+    reference_image抽出を検証する。
+    """
 
-    def test_plural_extracted_in_dict_order(self):
+    def test_performers_extracted(self):
         packet = {
             "panels": [
                 {
-                    "reference_images": {
-                        "ハルト": "haruto/neutral.png",
-                        "ナツキ": "natsuki/neutral.png",
-                    }
+                    "performers": [
+                        {"name": "ハルト", "reference_image": "haruto/neutral.png"},
+                        {"name": "ナツキ", "reference_image": "natsuki/neutral.png"},
+                    ]
                 }
             ]
         }
@@ -150,13 +150,27 @@ class ExtractReferenceImagesFromPacketTest(unittest.TestCase):
     def test_duplicates_removed_across_panels(self):
         packet = {
             "panels": [
-                {"reference_image": "haruto/neutral.png"},
-                {"reference_image": "haruto/neutral.png"},
+                {"performers": [{"name": "ハルト", "reference_image": "haruto/neutral.png"}]},
+                {"performers": [{"name": "ハルト", "reference_image": "haruto/neutral.png"}]},
             ]
         }
         self.assertEqual(cmri.extract_reference_images_from_packet(packet), ["haruto/neutral.png"])
 
-    def test_no_panels_returns_empty(self):
+    def test_scribe_panel_reference_and_emblem_extracted(self):
+        packet = {
+            "panels": [],
+            "scribe_panel": {
+                "reference_image": "scribe/neutral.png",
+                "emblem_reference": "scribe/equipment/official-scribe-bureau-emblem.png",
+            },
+        }
+        result = cmri.extract_reference_images_from_packet(packet)
+        self.assertEqual(
+            set(result),
+            {"scribe/neutral.png", "scribe/equipment/official-scribe-bureau-emblem.png"},
+        )
+
+    def test_no_panels_or_scribe_panel_returns_empty(self):
         self.assertEqual(cmri.extract_reference_images_from_packet({}), [])
 
 
@@ -228,7 +242,17 @@ class CliTest(unittest.TestCase):
     def test_packet_mode(self):
         packet_path = pathlib.Path(self._tmpdir.name) / "packet.json"
         packet_path.write_text(
-            json.dumps({"panels": [{"reference_image": "haruto/surprise-medium.png"}]}),
+            json.dumps(
+                {
+                    "panels": [
+                        {
+                            "performers": [
+                                {"name": "ハルト", "reference_image": "haruto/surprise-medium.png"}
+                            ]
+                        }
+                    ]
+                }
+            ),
             encoding="utf-8",
         )
         result = self._run(

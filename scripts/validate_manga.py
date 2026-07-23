@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""異世界ニホン4コマ版 Manga News Packetの検証スクリプト。
+"""異世界ニホン X用5コマ構成 Manga News Packet(v2)の検証スクリプト。
 
 manga_schema.pyによる構造検証(packet_version・source・4コマ固定・
-登場キャラ<=3人等)に加え、scripts/validate.py・scripts/banned_terms.pyの
-既存の禁止語検証(法案・選挙の文脈語、政党名カタカナ化、ニホンに実在
-しない王制表現)を、Packet内の日本語テキスト全体
-(isekai_text・scribe_note・各コマのscene/dialogue/background)に対して
-行う。RunPod側へ渡す前の最終確認として使う。
+登場キャラ2〜3人+書記官・performers/dialogues・scribe_panel等)に加え、
+scripts/validate.py・scripts/banned_terms.pyの既存の禁止語検証(法案・選挙の
+文脈語、政党名カタカナ化、ニホンに実在しない王制表現)を、Packet内の
+日本語テキスト全体(isekai_text・scribe_note・各コマのscene/background/
+image_prompt/negative_prompt・各dialogueのtext)に対して行う。RunPod側へ
+渡す前の最終確認として使う。
+
+v1からv2への変更点: 旧`validate_chatgpt_route`(panelsをハルト・ナツキの
+2人に固定する追加検証レイヤー)は廃止した。v2のmanga_schema.validate_packet
+自体が「物語側2〜3人(ハルト・ナツキ・アキラ・フユミから選択)+書記官、
+書記官はpanelsに登場させない」という同等以上の制約を一般スキーマとして
+持つため、別レイヤーとして維持する理由がなくなったため(実運用データが
+なかったことも確認済み、詳細はdocs/HANDOFF.md参照)。
 
 王制語の入力照合(check_kingdom_terms)は、Packetのsource(title・url・
 summaryのみ)だけでは元記事の情報量が乏しく、元記事に実在する正当な語彙
@@ -27,9 +35,9 @@ from banned_terms import CONTEXTUAL_FORBIDDEN_TERMS, FORBIDDEN_PARTY_KATAKANA
 
 def build_packet_text_blob(packet):
     """Packet内のテキストフィールドを連結し、禁止語検査用の正規化済み
-    テキストを作る。image_promptは本来英語だが、モデルが日本語(禁止語・
-    政党名カタカナ化等)を混入させる可能性を検査で捕捉できるよう、検査
-    対象に含める(Codexレビュー指摘)。
+    テキストを作る。image_prompt/negative_promptは本来英語だが、モデルが
+    日本語(禁止語・政党名カタカナ化等)を混入させる可能性を検査で捕捉
+    できるよう、検査対象に含める(Codexレビュー指摘、v1から継続)。
     """
     parts = [
         str(packet.get("isekai_text", "") or ""),
@@ -40,8 +48,16 @@ def build_packet_text_blob(packet):
         for panel in panels:
             if not isinstance(panel, dict):
                 continue
-            for field in ("scene", "dialogue", "background", "image_prompt"):
+            for field in ("scene", "background", "image_prompt", "negative_prompt"):
                 parts.append(str(panel.get(field, "") or ""))
+            dialogues = panel.get("dialogues")
+            if isinstance(dialogues, list):
+                for dialogue in dialogues:
+                    if isinstance(dialogue, dict):
+                        parts.append(str(dialogue.get("text", "") or ""))
+            caption = panel.get("caption")
+            if isinstance(caption, str):
+                parts.append(caption)
     return validate.normalize_for_check("\n".join(parts))
 
 
@@ -97,78 +113,16 @@ def validate_manga_packet(packet, raw_article=None):
     """
     reasons = list(manga_schema.validate_packet(packet))
 
+    if not isinstance(packet, dict):
+        # packetがdict以外(list等)の場合、manga_schema.validate_packet側で
+        # 既に不正と報告済み。build_packet_text_blob等がpacket.get(...)を
+        # 呼び出すため、続行するとAttributeErrorで異常終了してしまう
+        # (Codexレビュー指摘、Major)。
+        return reasons
+
     normalized_text = build_packet_text_blob(packet)
     source_text = build_source_text_blob(packet.get("source"), raw_article=raw_article)
     reasons.extend(check_banned_terms(normalized_text, source_text))
-
-    return reasons
-
-
-# ChatGPTルート(docs/manga-pipeline.md)専用の追加検証で許可するキャラクター。
-# manga_schema.ALLOWED_CHARACTERS(5人から自由選択)は、RunPodルート等での
-# 再利用を想定して汎用のまま維持する。ChatGPTルート固有の制約(panels1〜4は
-# ハルト・ナツキ専任、書記官はscribe_note〔第5コマ〕専任)は、構造検証とは
-# 別にこちらで追加検証する。
-CHATGPT_ROUTE_ALLOWED_CHARACTERS = ["ハルト", "ナツキ", "書記官"]
-CHATGPT_ROUTE_PANEL_CHARACTERS = ["ハルト", "ナツキ"]
-
-
-def _validate_chatgpt_route_panel(panel, index):
-    """panels[index]がChatGPTルートの制約(reference_images〔複数形〕必須・
-    キャラクターはハルト・ナツキのみ)を満たすかを検証する。
-
-    型不正(reference_imagesが辞書でない等)はmanga_schema.validate_packet側で
-    既に検出されるため、ここでは重複したエラーを出さない。
-    """
-    if "reference_images" not in panel:
-        return [
-            f"panels[{index}]はChatGPTルートではreference_images(複数形)の指定が必要です"
-            "(reference_image〔単数〕はこのルートでは使用しない)"
-        ]
-
-    value = panel.get("reference_images")
-    if not isinstance(value, dict):
-        return []
-
-    reasons = []
-    for name in value.keys():
-        if name not in CHATGPT_ROUTE_PANEL_CHARACTERS:
-            reasons.append(
-                f"panels[{index}].reference_imagesにChatGPTルートで許可されないキャラクターが"
-                f"含まれています: {name!r}(許可: {', '.join(CHATGPT_ROUTE_PANEL_CHARACTERS)})"
-            )
-    return reasons
-
-
-def validate_chatgpt_route(packet):
-    """ChatGPTルート専用の追加検証(構造検証・禁止語検証とは別レイヤー)。
-
-    このパケットが辞書であること、packet_versionが正しいこと、panelsが
-    4要素の配列であること等の一般構造は、manga_schema.validate_packetが
-    既に検証している前提とし、ここでは再検証しない。呼び出し側は通常
-    `manga_schema.validate_packet(packet) + validate_chatgpt_route(packet)`
-    のように両方の結果を合算して使う。
-    """
-    if not isinstance(packet, dict):
-        return ["パケットのルートはオブジェクトである必要があります"]
-
-    reasons = []
-
-    characters = packet.get("characters")
-    if isinstance(characters, list):
-        for name in characters:
-            if isinstance(name, str) and name not in CHATGPT_ROUTE_ALLOWED_CHARACTERS:
-                reasons.append(
-                    f"ChatGPTルートではcharactersに{name!r}を含められません"
-                    f"(許可: {', '.join(CHATGPT_ROUTE_ALLOWED_CHARACTERS)})"
-                )
-
-    panels = packet.get("panels")
-    if isinstance(panels, list):
-        for idx, panel in enumerate(panels):
-            if not isinstance(panel, dict):
-                continue
-            reasons.extend(_validate_chatgpt_route_panel(panel, idx))
 
     return reasons
 

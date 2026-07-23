@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""ChatGPT漫画生成ルート向けに、Manga News Packetが参照する正本画像
-(ハルト・ナツキ)一式を、comfyui-mobile-system側のローカルチェックアウトから
-まとめて収集するスクリプト。
+"""Manga News Packet(v2)が参照する正本画像(物語側キャラクター・書記官)
+一式を、comfyui-mobile-system側のローカルチェックアウトからまとめて
+収集するスクリプト。
 
 正本画像の実体(PNG)はnews-game-translator側には存在せず、別リポジトリ
 comfyui-mobile-system側(profiles/sdxl/isekai_nihon_manga/reference_images/
@@ -143,29 +143,38 @@ def resolve_source_path(comfyui_root, reference_image):
 
 
 def extract_reference_images_from_packet(packet):
-    """Manga News Packetのpanels[]から、参照されているreference_image
-    (論理ID)一覧を重複なく抽出する(出現順を維持)。単数形
-    (reference_image)・複数形(reference_images)の両方に対応する。
-    書記官(scribe_note)は文字列フィールドのみで参照画像を持たないため、
-    対象外(書記官の正本画像は現時点で未準備。docs/manga-pipeline.md参照)。
+    """Manga News Packet(v2)のpanels[].performers[]とscribe_panelから、
+    参照されているreference_image(論理ID)一覧を重複なく抽出する
+    (出現順を維持)。
+
+    v1では書記官(scribe_note)は文字列フィールドのみで参照画像を持たない
+    ため対象外としていたが、comfyui-mobile-system側で書記官の正本画像
+    (表情31・turnaround4・equipment〔書記局章〕1)の登録・Release公開が
+    完了したため、v2ではscribe_panel.reference_image・emblem_referenceも
+    収集対象に含める。
     """
     seen = []
+
+    def _add(value):
+        if isinstance(value, str) and value not in seen:
+            seen.append(value)
+
     panels = packet.get("panels")
-    if not isinstance(panels, list):
-        return seen
-    for panel in panels:
-        if not isinstance(panel, dict):
-            continue
-        if "reference_images" in panel:
-            value = panel.get("reference_images")
-            if isinstance(value, dict):
-                for filename in value.values():
-                    if isinstance(filename, str) and filename not in seen:
-                        seen.append(filename)
-        else:
-            value = panel.get("reference_image")
-            if isinstance(value, str) and value not in seen:
-                seen.append(value)
+    if isinstance(panels, list):
+        for panel in panels:
+            if not isinstance(panel, dict):
+                continue
+            performers = panel.get("performers")
+            if isinstance(performers, list):
+                for performer in performers:
+                    if isinstance(performer, dict):
+                        _add(performer.get("reference_image"))
+
+    scribe_panel = packet.get("scribe_panel")
+    if isinstance(scribe_panel, dict):
+        _add(scribe_panel.get("reference_image"))
+        _add(scribe_panel.get("emblem_reference"))
+
     return seen
 
 
@@ -232,7 +241,11 @@ def main():
             sys.exit(1)
         reference_images = extract_reference_images_from_packet(packet)
         if not reference_images:
-            print("[ERROR] Packetに参照画像(reference_image/reference_images)が見つかりません", file=sys.stderr)
+            print(
+                "[ERROR] Packetに参照画像(panels[].performers[].reference_image・"
+                "scribe_panel.reference_image/emblem_reference)が見つかりません",
+                file=sys.stderr,
+            )
             sys.exit(1)
     elif args.default_turnaround:
         reference_images = list(DEFAULT_TURNAROUND_LOGICAL_IDS)
